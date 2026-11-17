@@ -17,6 +17,7 @@ from urllib.parse import quote, urlencode
 import httpx
 import jwt
 from fastapi import APIRouter, Cookie, File, Header, HTTPException, Query, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
@@ -820,6 +821,9 @@ def get_sso_config(request: Request):
         )
         login_url = f"{auth_base}/protocol/openid-connect/auth?{qs}"
 
+    panel_raw = str(cfg.get("panel_api_url") or PANEL_API_URL or "https://panel.cric.ac.th").rstrip("/")
+    panel_base = panel_raw[:-4] if panel_raw.endswith("/api") else panel_raw
+
     return {
         "sso_issuer": cfg["sso_issuer"],
         "sso_realm": sso_realm,
@@ -827,6 +831,7 @@ def get_sso_config(request: Request):
         "client_configured": bool(cfg["sso_client_id"]),
         "allowed_domain": cfg["allowed_domain"],
         "auth_dev_mode": bool(cfg["auth_dev_mode"]),
+        "panel_url": panel_base,
         "login_url": login_url,
         "login_endpoint": "/v1/auth/sso/login",
         "logout_endpoint": "/v1/auth/logout",
@@ -1071,6 +1076,62 @@ async def _build_sso_logout_url(request: Request, cfg: dict[str, Any], id_token_
     return f"{end_session}?{urlencode(params)}"
 
 
+class SyncSessionPayload(BaseModel):
+    sessionToken: str | None = None
+    token: str | None = None
+
+
+@router.post("/sso/sync-session")
+def sync_sso_session(request: Request, body: SyncSessionPayload):
+    """Verify an sso_token issued by Central Panel, provision/sync user, and issue session cookie."""
+    raw_token = (body.sessionToken or body.token or "").strip()
+    if not raw_token:
+        raise HTTPException(status_code=400, detail="ไม่พบ sessionToken จาก Central Panel")
+
+    cfg = _effective_auth_cfg()
+    payload = verify_sso_jwt(raw_token, extra_secrets=[str(cfg.get("panel_sync_secret") or "")])
+    if not payload:
+        raise HTTPException(status_code=401, detail="เซสชันไม่ถูกต้องหรือหมดอายุแล้ว")
+
+    user = _provision_sso_user(payload, cfg, panel_record=None)
+
+    session_payload = {
+        "sub": user.get("id") or user.get("email") or user.get("username"),
+        "username": user.get("username") or "",
+        "email": user.get("email") or "",
+        "name": user.get("full_name") or "",
+        "role": user.get("role") or "drafter",
+        "auth_source": "panel_sso_sync",
+        "exp": int(time.time()) + SESSION_TTL_SECONDS,
+    }
+    session_jwt = _sign_hs256_jwt(session_payload, _primary_jwt_secret(cfg))
+
+    actor_id = str(user.get("email") or user.get("username") or user.get("id") or "panel_sso")
+    db.add_audit_log(None, actor_id, "sso_sync_session", {"source": "panel"})
+
+    resp = JSONResponse({"success": True, "user": jsonable_encoder(user), "token": session_jwt})
+    is_https = _external_base_url(request).startswith("https://")
+    resp.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session_jwt,
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=is_https,
+        path="/",
+    )
+    resp.set_cookie(
+        key="cric_logged_in",
+        value="true",
+        max_age=SESSION_TTL_SECONDS,
+        httponly=False,
+        samesite="lax",
+        secure=is_https,
+        path="/",
+    )
+    return resp
+
+
 @router.post("/logout")
 async def sso_logout_post(
     request: Request,
@@ -1091,6 +1152,7 @@ async def sso_logout_post(
     resp.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
     resp.delete_cookie(key=ID_TOKEN_COOKIE_NAME, path="/")
     resp.delete_cookie(key=OIDC_STATE_COOKIE_NAME, path="/")
+    resp.delete_cookie(key="cric_logged_in", path="/")
     return resp
 
 
@@ -1101,7 +1163,7 @@ async def sso_logout_get(
     cric_sso_id_token: str | None = Cookie(default=None),
 ):
     cfg = _effective_auth_cfg()
-    target = "/"
+    target = "/login?logout=1"
     if sso:
         sso_logout_url = await _build_sso_logout_url(request, cfg, cric_sso_id_token)
         if sso_logout_url:
@@ -1110,6 +1172,7 @@ async def sso_logout_get(
     resp.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
     resp.delete_cookie(key=ID_TOKEN_COOKIE_NAME, path="/")
     resp.delete_cookie(key=OIDC_STATE_COOKIE_NAME, path="/")
+    resp.delete_cookie(key="cric_logged_in", path="/")
     return resp
 
 

@@ -119,6 +119,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           if (ssoRes?.auth_dev_mode) {
             const usersRes = await api.listUsers().catch(() => ({ users: [] }));
             setUsers(usersRes.users || []);
+          } else if (pathname !== "/login" && pathname !== "/auth/callback") {
+            const nextParam = pathname && pathname !== "/" ? `?next=${encodeURIComponent(pathname)}` : "";
+            window.location.replace(`/login${nextParam}`);
+            return;
           }
         }
       } finally {
@@ -260,7 +264,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const userHandle = me?.username ? `@${me.username}` : me?.email || activeIdentifier || "guest";
   const effectiveDevValue = me ? (activeIdentifier || me.email || me.username || "guest") : "guest";
-  const ssoStartUrl = getSsoLoginUrl(pathname && pathname !== "/login" ? pathname : "/");
+  const ssoStartUrl = `/login${pathname && pathname !== "/login" && pathname !== "/auth/callback" && pathname !== "/" ? `?next=${encodeURIComponent(pathname)}` : ""}`;
 
   async function handleLogout() {
     if (loggingOut) return;
@@ -286,6 +290,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       } else {
         setMe(null);
         setAuthSource("guest");
+        window.location.replace("/login?logout=1");
       }
     } catch {
       setMe(null);
@@ -295,7 +300,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }
 
-  if (pathname === "/login") {
+  if (pathname === "/login" || pathname === "/auth/callback") {
     return <>{children}</>;
   }
 

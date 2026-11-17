@@ -477,12 +477,18 @@ export const api = {
       client_configured: boolean;
       allowed_domain: string;
       auth_dev_mode: boolean;
+      panel_url?: string;
       login_url: string | null;
       login_endpoint?: string;
       logout_endpoint?: string;
       suggested_redirect_uri?: string;
       suggested_post_logout_uri?: string;
     }>("/v1/auth/sso/config"),
+  syncSsoSession: (sessionToken: string) =>
+    apiFetch<{ success: boolean; user: UserProfile; token: string }>("/v1/auth/sso/sync-session", {
+      method: "POST",
+      body: JSON.stringify({ sessionToken }),
+    }),
   listUsers: () => apiFetch<{ users: UserProfile[] }>("/v1/auth/users"),
   syncPanelUsers: () => apiFetch<{ source: string; synced_count: number; users: UserProfile[] }>("/v1/auth/sync-panel", { method: "POST" }),
   uploadSignature: async (file: File) => {
