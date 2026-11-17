@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell,
   BookOpenCheck,
   CheckSquare,
+  ChevronDown,
   FileText,
   GraduationCap,
   Layers,
@@ -21,19 +22,20 @@ import {
   PanelLeftOpen,
   Settings,
   ShieldCheck,
-  User as UserIcon,
   UserCog,
   X,
 } from "lucide-react";
 import {
   api,
   ApiError,
+  formatUserSubtitle,
   getActiveUserEmail,
   getSsoLoginUrl,
   setActiveUserEmail,
   UserProfile,
 } from "@/lib/api";
 import { NotificationBell } from "@/components/NotificationBell";
+import { UserAvatar } from "@/components/UserAvatar";
 import { AppLauncher } from "@/components/launcher/AppLauncher";
 import { confirmAction, toastSuccess } from "@/lib/swal";
 
@@ -70,6 +72,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const [collapsed, setCollapsed] = useState<boolean>(false);
   const [mobileOpen, setMobileOpen] = useState<boolean>(false);
+  const [userMenuOpen, setUserMenuOpen] = useState<boolean>(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     try {
@@ -79,6 +83,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       // ignore
     }
   }, []);
+
+  useEffect(() => {
+    if (!userMenuOpen) return;
+    const onOutsideClick = (e: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setUserMenuOpen(false);
+      }
+    };
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setUserMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onOutsideClick);
+    window.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("mousedown", onOutsideClick);
+      window.removeEventListener("keydown", onEsc);
+    };
+  }, [userMenuOpen]);
 
   useEffect(() => {
     const load = async () => {
@@ -144,6 +166,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setMobileOpen(false);
+    setUserMenuOpen(false);
   }, [pathname]);
 
   function toggleCollapse() {
@@ -262,9 +285,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return navGroups[0].items[0];
   }, [navGroups, pathname]);
 
-  const userHandle = me?.username ? `@${me.username}` : me?.email || activeIdentifier || "guest";
+  const userSubtitle = me ? formatUserSubtitle(me) : activeIdentifier || "guest";
   const effectiveDevValue = me ? (activeIdentifier || me.email || me.username || "guest") : "guest";
   const ssoStartUrl = `/login${pathname && pathname !== "/login" && pathname !== "/auth/callback" && pathname !== "/" ? `?next=${encodeURIComponent(pathname)}` : ""}`;
+  const isSsoSession = authSource === "sso" || authSource === "panel_jwt" || authSource === "panel_sso_sync";
 
   async function handleLogout() {
     if (loggingOut) return;
@@ -392,15 +416,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Link
                 href="/profile"
                 onClick={() => setMobileOpen(false)}
-                className="flex items-center gap-2 rounded p-1 transition-colors hover:bg-white"
+                className="flex items-center gap-2.5 rounded p-1 transition-colors hover:bg-white"
               >
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-[#CBD5E1] bg-white text-[#0F172A]">
-                  <UserIcon className="h-3.5 w-3.5" />
-                </div>
+                <UserAvatar avatarUrl={me.avatar_url} fullName={me.full_name} size="sm" />
                 <div className="min-w-0 leading-tight">
                   <div className="truncate text-xs font-bold text-[#0F172A]">{me.full_name}</div>
                   <div className="truncate text-[11px] text-[#475569]">
-                    {ROLE_LABELS[me.role] || me.role} · <span className="font-mono">{userHandle}</span>
+                    {ROLE_LABELS[me.role] || me.role}
+                    {userSubtitle ? ` · ${userSubtitle}` : ""}
                   </div>
                 </div>
               </Link>
@@ -520,48 +543,106 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             />
             {me && <NotificationBell />}
             {me ? (
-              <>
-                <Link
-                  href="/profile"
-                  className="inline-flex items-center gap-1 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] px-2 py-1 text-[11px] font-semibold text-[#0F172A] hover:bg-slate-100 sm:hidden"
-                  aria-label="ไปยังหน้าโปรไฟล์ของฉัน"
-                >
-                  <UserIcon className="h-3 w-3 text-[#1D4ED8]" />
-                  <span className="max-w-[96px] truncate font-mono">{userHandle}</span>
-                </Link>
-
-                <Link
-                  href="/profile"
-                  title="แก้ไขโปรไฟล์และลายเซ็นของคุณ"
-                  className="hidden items-center gap-2 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] px-2.5 py-1 transition-colors hover:border-[#94A3B8] hover:bg-white lg:flex"
-                >
-                  <div className="flex h-6 w-6 items-center justify-center rounded border border-[#CBD5E1] bg-white text-[#0F172A]">
-                    <UserIcon className="h-3.5 w-3.5" />
-                  </div>
-                  <div className="leading-tight">
-                    <div className="flex items-center gap-1.5 text-xs font-semibold text-[#0F172A]">
-                      <span>{me.full_name}</span>
-                      {(authSource === "sso" || authSource === "panel_jwt") && (
-                        <span className="rounded bg-emerald-100 px-1 py-0.5 text-[9px] font-bold text-emerald-800">SSO</span>
-                      )}
-                    </div>
-                    <div className="text-[10px] text-[#475569]">
-                      <span>{ROLE_LABELS[me.role] || me.role}</span>
-                      <span className="ml-1.5 font-mono text-[#64748B]">{userHandle}</span>
-                    </div>
-                  </div>
-                </Link>
+              <div ref={userMenuRef} className="relative flex items-center pl-1 sm:border-l sm:border-[#E2E8F0] sm:pl-3">
                 <button
                   type="button"
-                  onClick={handleLogout}
-                  disabled={loggingOut}
-                  title="ออกจากระบบ"
-                  className="hidden items-center gap-1 rounded-md border border-[#CBD5E1] bg-white px-2.5 py-1.5 text-xs font-medium text-[#334155] hover:border-red-200 hover:bg-red-50 hover:text-[#B91C1C] sm:inline-flex"
+                  onClick={() => setUserMenuOpen((prev) => !prev)}
+                  aria-expanded={userMenuOpen}
+                  aria-haspopup="menu"
+                  aria-label="เปิดเมนูโปรไฟล์ผู้ใช้งาน"
+                  className="flex items-center gap-2 rounded-lg px-2 py-1 text-left transition-colors hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
                 >
-                  <LogOut className="h-3.5 w-3.5" />
-                  <span className="hidden xl:inline">ออกจากระบบ</span>
+                  <UserAvatar avatarUrl={me.avatar_url} fullName={me.full_name} size="sm" />
+                  <div className="hidden min-w-0 leading-tight sm:block">
+                    <div className="max-w-[160px] truncate text-xs font-semibold text-[#0F172A]">
+                      {me.full_name}
+                    </div>
+                    <div className="max-w-[160px] truncate text-[11px] text-[#64748B]">
+                      {userSubtitle}
+                    </div>
+                  </div>
+                  <ChevronDown
+                    className={`h-3.5 w-3.5 shrink-0 text-[#64748B] transition-transform duration-150 ${
+                      userMenuOpen ? "rotate-180" : ""
+                    }`}
+                  />
                 </button>
-              </>
+
+                {userMenuOpen && (
+                  <div
+                    role="menu"
+                    className="absolute right-0 top-full z-50 mt-2 w-72 overflow-hidden rounded-lg border border-[#CBD5E1] bg-white shadow-lg"
+                  >
+                    <div className="border-b border-[#E2E8F0] bg-[#F8FAFC] p-3.5">
+                      <div className="flex items-center gap-3">
+                        <UserAvatar avatarUrl={me.avatar_url} fullName={me.full_name} size="md" />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-bold text-[#0F172A]">{me.full_name}</div>
+                          <div className="truncate text-xs text-[#475569]">{userSubtitle}</div>
+                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                            <span className="rounded border border-[#CBD5E1] bg-white px-2 py-0.5 text-[10px] font-semibold text-[#334155]">
+                              {ROLE_LABELS[me.role] || me.role}
+                            </span>
+                            {isSsoSession && (
+                              <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">
+                                SSO
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-0.5 p-1.5 text-xs font-medium text-[#334155]">
+                      <Link
+                        href="/profile"
+                        role="menuitem"
+                        onClick={() => setUserMenuOpen(false)}
+                        className="flex items-center gap-2.5 rounded-md px-3 py-2 hover:bg-slate-100 hover:text-[#0F172A]"
+                      >
+                        <UserCog className="h-4 w-4 text-[#1D4ED8]" />
+                        <span>โปรไฟล์ รูปประจำตัว &amp; ลายเซ็น</span>
+                      </Link>
+                      <Link
+                        href="/notifications"
+                        role="menuitem"
+                        onClick={() => setUserMenuOpen(false)}
+                        className="flex items-center gap-2.5 rounded-md px-3 py-2 hover:bg-slate-100 hover:text-[#0F172A]"
+                      >
+                        <Bell className="h-4 w-4 text-amber-600" />
+                        <span>กล่องแจ้งเตือนของฉัน</span>
+                      </Link>
+                      {isAdmin && (
+                        <Link
+                          href="/settings"
+                          role="menuitem"
+                          onClick={() => setUserMenuOpen(false)}
+                          className="flex items-center gap-2.5 rounded-md px-3 py-2 hover:bg-slate-100 hover:text-[#0F172A]"
+                        >
+                          <Settings className="h-4 w-4 text-[#475569]" />
+                          <span>ตั้งค่าระบบ</span>
+                        </Link>
+                      )}
+                    </div>
+
+                    <div className="border-t border-[#E2E8F0] p-1.5">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setUserMenuOpen(false);
+                          handleLogout();
+                        }}
+                        disabled={loggingOut}
+                        className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-xs font-semibold text-[#B91C1C] hover:bg-red-50 disabled:opacity-50"
+                      >
+                        <LogOut className="h-4 w-4" />
+                        <span>{loggingOut ? "กำลังออกจากระบบ..." : "ออกจากระบบ"}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             ) : (
               authLoaded && (
                 <a

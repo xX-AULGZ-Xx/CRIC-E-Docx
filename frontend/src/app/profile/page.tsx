@@ -4,15 +4,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   BadgeCheck,
   Building2,
+  Camera,
   Loader2,
   PenTool,
   Save,
   ShieldCheck,
   Trash2,
   Upload,
-  User as UserIcon,
 } from "lucide-react";
-import { api, OrgProfile, UserProfile } from "@/lib/api";
+import { api, formatUserSubtitle, OrgProfile, UserProfile } from "@/lib/api";
+import { UserAvatar } from "@/components/UserAvatar";
 import { confirmDanger, toastError, toastSuccess } from "@/lib/swal";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -48,6 +49,7 @@ export default function UserProfilePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sigBusy, setSigBusy] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [errMsg, setErrMsg] = useState("");
 
@@ -197,11 +199,61 @@ export default function UserProfilePage() {
     }
   }
 
+  async function handleUploadAvatar(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setAvatarBusy(true);
+    setMsg("");
+    setErrMsg("");
+    try {
+      await api.uploadAvatar(file);
+      const meRes = await api.me();
+      setMe(meRes.user);
+      setMsg("อัปโหลดรูปโปรไฟล์เรียบร้อยแล้ว");
+      toastSuccess("อัปโหลดรูปโปรไฟล์สำเร็จ");
+    } catch (err) {
+      const m = err instanceof Error ? err.message : "อัปโหลดรูปโปรไฟล์ไม่สำเร็จ";
+      setErrMsg(m);
+      toastError("อัปโหลดรูปโปรไฟล์ไม่สำเร็จ", m);
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
+  async function handleDeleteAvatar() {
+    const ok = await confirmDanger({
+      title: "ลบรูปโปรไฟล์?",
+      text: "ระบบจะกลับไปแสดงตัวอักษรย่อชื่อแทน หรือซิงค์รูปจาก CRIC Panel เมื่อเข้าสู่ระบบใหม่",
+      confirmText: "ยืนยันลบรูป",
+    });
+    if (!ok) return;
+
+    setAvatarBusy(true);
+    setMsg("");
+    setErrMsg("");
+    try {
+      await api.deleteMyAvatar();
+      const meRes = await api.me();
+      setMe(meRes.user);
+      setMsg("ลบรูปโปรไฟล์ออกจากบัญชีแล้ว");
+      toastSuccess("ลบรูปโปรไฟล์เรียบร้อย");
+    } catch (err) {
+      const m = err instanceof Error ? err.message : "ลบรูปโปรไฟล์ไม่สำเร็จ";
+      setErrMsg(m);
+      toastError("ลบรูปโปรไฟล์ไม่สำเร็จ", m);
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
   const divisions = orgProfile?.divisions
     ? Object.entries(orgProfile.divisions).map(([code, info]) => ({ code, name: info.name }))
     : DEFAULT_DIVISIONS;
 
-  const userHandle = me?.username ? `@${me.username}` : me?.email || "-";
+  const userSubtitle = formatUserSubtitle(me) || "-";
+  const avatarUrl = (me?.avatar_url || "").trim();
+  const isLocalAvatar = avatarUrl.startsWith("/v1/auth/users/");
 
   if (loading && !me) {
     return (
@@ -214,26 +266,51 @@ export default function UserProfilePage() {
 
   return (
     <div className="space-y-4">
-      {/* Identity Overview Banner */}
+      {/* Identity Overview Banner with Avatar Manager */}
       <div className="ledger-panel flex flex-wrap items-center justify-between gap-4 px-5 py-4">
-        <div className="flex items-center gap-3.5">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-[#CBD5E1] bg-[#0F172A] text-white">
-            <UserIcon className="h-6 w-6" />
-          </div>
+        <div className="flex flex-wrap items-center gap-4">
+          <UserAvatar avatarUrl={me?.avatar_url} fullName={me?.full_name} size="lg" />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-base font-bold text-[#0F172A]">{me?.full_name || "ผู้ใช้งาน"}</h2>
               <span className="rounded bg-[#EFF6FF] px-2 py-0.5 font-mono text-xs font-semibold text-[#1E3A8A]">
-                {userHandle}
+                {userSubtitle}
               </span>
               <span className="inline-flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
                 <ShieldCheck className="h-3 w-3" />
                 {me ? ROLE_LABELS[me.role] || me.role : "-"}
               </span>
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#475569]">
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#475569]">
               <span>{me?.position_title || "-"}</span>
-              {me?.email && <span className="font-mono text-[#64748B]">{me.email}</span>}
+              <span className="text-[11px] text-[#64748B]">
+                · รูปโปรไฟล์:{" "}
+                {isLocalAvatar ? "อัปโหลดใน E-Docx" : avatarUrl ? "ซิงค์จาก CRIC Panel / SSO" : "ตัวอักษรย่อ"}
+              </span>
+            </div>
+            <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
+              <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-[#CBD5E1] bg-white px-2.5 py-1 font-semibold text-[#0F172A] hover:bg-slate-50">
+                {avatarBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5 text-[#1D4ED8]" />}
+                <span>{avatarUrl ? "เปลี่ยนรูปโปรไฟล์" : "อัปโหลดรูปโปรไฟล์"}</span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  disabled={avatarBusy}
+                  onChange={handleUploadAvatar}
+                  className="hidden"
+                />
+              </label>
+              {avatarUrl && (
+                <button
+                  type="button"
+                  disabled={avatarBusy}
+                  onClick={handleDeleteAvatar}
+                  className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2.5 py-1 font-semibold text-[#B91C1C] hover:bg-red-100 disabled:opacity-50"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>ลบรูป</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

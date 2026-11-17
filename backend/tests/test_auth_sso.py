@@ -395,3 +395,72 @@ def test_dev_mode_guest_identifier_returns_401_without_creating_guest_user():
         assert len(users_res.json()["users"]) >= 1
     finally:
         _restore_integrations(prev)
+
+
+def test_avatar_hybrid_sync_upload_serve_preserve_and_delete():
+    client.cookies.clear()
+    prev = _with_temp_integrations(
+        {
+            "auth_dev_mode": True,
+            "panel_api_url": "https://panel.cric.ac.th/api",
+            "panel_sync_secret": "panel-shared-secret-key-2026-long",
+        }
+    )
+    try:
+        # 1. Panel sync-session with relative avatarUrl resolves against panel_api_url base
+        panel_tok = jwt.encode(
+            {
+                "username": "avatar.tester@cric.ac.th",
+                "email": "avatar.tester@cric.ac.th",
+                "name": "ณัฐพงษ์ ทดสอบรูปโปรไฟล์",
+                "role": "saraban_admin",
+                "avatarUrl": "/uploads/avatars/natthaphong.png",
+                "exp": int(time.time()) + 300,
+            },
+            "panel-shared-secret-key-2026-long",
+            algorithm="HS256",
+        )
+        sync_res = client.post("/v1/auth/sso/sync-session", json={"sessionToken": panel_tok})
+        assert sync_res.status_code == 200
+        user_obj = sync_res.json()["user"]
+        user_id = user_obj["id"]
+        # Username normalized without duplicate @ when matching email
+        assert user_obj["username"] == "avatar.tester"
+        assert user_obj["avatar_url"] == "https://panel.cric.ac.th/uploads/avatars/natthaphong.png"
+
+        # 2. Upload custom local avatar in E-Docx
+        tiny_png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+        )
+        up_res = client.post(
+            "/v1/auth/avatar",
+            files={"file": ("me.png", tiny_png, "image/png")},
+        )
+        assert up_res.status_code == 200
+        local_avatar_url = up_res.json()["avatar_url"]
+        assert local_avatar_url.startswith(f"/v1/auth/users/{user_id}/avatar")
+
+        # 3. Serve avatar image cleanly
+        get_res = client.get(f"/v1/auth/users/{user_id}/avatar")
+        assert get_res.status_code == 200
+        assert get_res.headers["content-type"].startswith("image/")
+
+        # 4. Subsequent Panel sync-session preserves locally uploaded E-Docx avatar
+        sync_res2 = client.post("/v1/auth/sso/sync-session", json={"sessionToken": panel_tok})
+        assert sync_res2.status_code == 200
+        assert sync_res2.json()["user"]["avatar_url"] == local_avatar_url
+
+        # 5. Reject invalid extension
+        bad_up = client.post(
+            "/v1/auth/avatar",
+            files={"file": ("bad.txt", b"not-an-image", "text/plain")},
+        )
+        assert bad_up.status_code == 400
+
+        # 6. Delete avatar clears avatar_url and returns 404 on fetch
+        del_res = client.delete("/v1/auth/avatar")
+        assert del_res.status_code == 200
+        assert client.get(f"/v1/auth/users/{user_id}/avatar").status_code == 404
+        client.cookies.clear()
+    finally:
+        _restore_integrations(prev)

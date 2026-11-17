@@ -158,8 +158,29 @@ export interface UserProfile {
   default_reviewer_email?: string;
   role: "drafter" | "unit_head" | "deputy_director" | "director" | "saraban_admin";
   signature_storage_path?: string;
+  avatar_url?: string;
   is_active: boolean;
   synced_at?: string;
+}
+
+/** Return clean subtitle (email preferred, or normalized @username without duplicate @). */
+export function formatUserSubtitle(user?: Pick<UserProfile, "email" | "username"> | null): string {
+  if (!user) return "";
+  const email = (user.email || "").trim();
+  if (email) return email;
+  const rawUser = (user.username || "").trim().replace(/^@+/, "");
+  if (!rawUser) return "";
+  return rawUser.includes("@") ? rawUser : `@${rawUser}`;
+}
+
+/** Resolve local (/v1/...) or external avatar URL cleanly for browser <img> rendering. */
+export function resolveAvatarSrc(avatarUrl?: string | null): string {
+  const raw = (avatarUrl || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("/v1/") && API_BASE) {
+    return `${API_BASE}${raw}`;
+  }
+  return raw;
 }
 
 export function notifyProfileUpdated() {
@@ -500,6 +521,18 @@ export const api = {
   },
   deleteMySignature: async () => {
     const res = await apiFetch<{ ok: boolean }>("/v1/auth/signature", { method: "DELETE" });
+    notifyProfileUpdated();
+    return res;
+  },
+  uploadAvatar: async (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await apiFetch<{ ok: boolean; avatar_url: string }>("/v1/auth/avatar", { method: "POST", body: fd });
+    notifyProfileUpdated();
+    return res;
+  },
+  deleteMyAvatar: async () => {
+    const res = await apiFetch<{ ok: boolean }>("/v1/auth/avatar", { method: "DELETE" });
     notifyProfileUpdated();
     return res;
   },

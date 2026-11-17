@@ -9,6 +9,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", str(BASE_DIR / "storage")))
 RENDERED_DIR = STORAGE_DIR / "rendered"
 SIGNATURES_DIR = STORAGE_DIR / "signatures"
+AVATARS_DIR = STORAGE_DIR / "avatars"
 ATTACHMENTS_DIR = STORAGE_DIR / "attachments"
 CUSTOM_TEMPLATES_DIR = STORAGE_DIR / "custom_templates"
 SYSTEM_TEMPLATE_OVERRIDES_DIR = STORAGE_DIR / "system_template_overrides"
@@ -16,6 +17,7 @@ TEMPLATES_DIR = BASE_DIR / "resources" / "templates"
 
 RENDERED_DIR.mkdir(parents=True, exist_ok=True)
 SIGNATURES_DIR.mkdir(parents=True, exist_ok=True)
+AVATARS_DIR.mkdir(parents=True, exist_ok=True)
 ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
 CUSTOM_TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 SYSTEM_TEMPLATE_OVERRIDES_DIR.mkdir(parents=True, exist_ok=True)

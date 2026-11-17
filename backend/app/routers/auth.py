@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from app.config import (
     ALLOWED_EMAIL_DOMAIN,
     AUTH_DEV_MODE,
+    AVATARS_DIR,
     JWT_SECRET,
     PANEL_API_TOKEN,
     PANEL_API_URL,
@@ -343,6 +344,43 @@ async def _lookup_panel_user(identifier: str | None, cfg: dict[str, Any]) -> dic
     return None
 
 
+def _extract_avatar_url(
+    claims: dict[str, Any],
+    panel_record: dict[str, Any] | None,
+    cfg: dict[str, Any],
+) -> str | None:
+    """Resolve user avatar URL from Panel record or OIDC/JWT claims."""
+    candidates = [
+        (panel_record or {}).get("avatarUrl"),
+        (panel_record or {}).get("avatar_url"),
+        (panel_record or {}).get("avatar"),
+        (panel_record or {}).get("picture"),
+        (panel_record or {}).get("image"),
+        claims.get("avatarUrl"),
+        claims.get("avatar_url"),
+        claims.get("avatar"),
+        claims.get("picture"),
+        claims.get("image"),
+        claims.get("photoUrl"),
+    ]
+    raw = ""
+    for item in candidates:
+        if isinstance(item, str) and item.strip():
+            raw = item.strip()
+            break
+    if not raw:
+        return None
+    if raw.startswith("http://") or raw.startswith("https://") or raw.startswith("data:image/"):
+        return raw
+    if raw.startswith("/"):
+        panel_url = str(cfg.get("panel_api_url") or PANEL_API_URL or "").strip().rstrip("/")
+        panel_base = panel_url[:-4] if panel_url.endswith("/api") else panel_url
+        if panel_base.startswith("http://") or panel_base.startswith("https://"):
+            return f"{panel_base}{raw}"
+        return raw
+    return None
+
+
 def _provision_sso_user(
     claims: dict[str, Any],
     cfg: dict[str, Any],
@@ -377,6 +415,7 @@ def _provision_sso_user(
                 break
 
     claims_role = _extract_claims_role(claims, str(cfg.get("sso_client_id") or SSO_CLIENT_ID))
+    resolved_avatar = _extract_avatar_url(claims, panel_record, cfg)
 
     if existing:
         if not existing.get("is_active", True):
@@ -389,7 +428,12 @@ def _provision_sso_user(
 
         valid_sso_sub = sso_subject if (sso_subject and sso_subject != str(existing.get("id"))) else None
         needs_link = bool(valid_sso_sub and not existing.get("sso_subject"))
-        if not needs_link and not upgraded_role:
+
+        existing_avatar = str(existing.get("avatar_url") or "").strip()
+        is_local_avatar = existing_avatar.startswith("/v1/auth/users/")
+        needs_avatar_sync = bool(resolved_avatar and not is_local_avatar and resolved_avatar != existing_avatar)
+
+        if not needs_link and not upgraded_role and not needs_avatar_sync:
             return existing
 
         return db.upsert_user(
@@ -400,6 +444,7 @@ def _provision_sso_user(
                 "full_name": None,
                 "position_title": None,
                 "role": upgraded_role,
+                "avatar_url": resolved_avatar if needs_avatar_sync else None,
                 "is_active": True,
             }
         )
@@ -408,12 +453,14 @@ def _provision_sso_user(
     panel_role = map_panel_role_to_edocx((panel_record or {}).get("role")) if panel_record else "drafter"
     initial_role = panel_role if _ROLE_PRIORITY.get(panel_role, 1) >= _ROLE_PRIORITY.get(claims_role, 1) else claims_role
 
+    clean_new_username = username.split("@")[0] if (username and "@" in username and email and username.lower() == email) else username
+
     full_name = (
         (panel_record or {}).get("full_name")
         or (panel_record or {}).get("displayName")
         or claims.get("name")
         or f"{claims.get('given_name', '')} {claims.get('family_name', '')}".strip()
-        or username
+        or clean_new_username
         or email
         or "ผู้ใช้งาน CRIC"
     )
@@ -430,12 +477,13 @@ def _provision_sso_user(
         {
             "sso_subject": sso_subject,
             "panel_user_id": panel_user_id,
-            "username": username,
+            "username": clean_new_username,
             "email": email,
             "full_name": str(full_name).strip(),
             "position_title": str(position_title).strip(),
             "division_code": division_code,
             "role": initial_role,
+            "avatar_url": resolved_avatar or "",
             "is_active": True,
         }
     )
@@ -1082,7 +1130,7 @@ class SyncSessionPayload(BaseModel):
 
 
 @router.post("/sso/sync-session")
-def sync_sso_session(request: Request, body: SyncSessionPayload):
+async def sync_sso_session(request: Request, body: SyncSessionPayload):
     """Verify an sso_token issued by Central Panel, provision/sync user, and issue session cookie."""
     raw_token = (body.sessionToken or body.token or "").strip()
     if not raw_token:
@@ -1093,7 +1141,13 @@ def sync_sso_session(request: Request, body: SyncSessionPayload):
     if not payload:
         raise HTTPException(status_code=401, detail="เซสชันไม่ถูกต้องหรือหมดอายุแล้ว")
 
-    user = _provision_sso_user(payload, cfg, panel_record=None)
+    panel_rec = None
+    if not _extract_avatar_url(payload, None, cfg):
+        ident = str(payload.get("email") or payload.get("username") or "").strip()
+        if ident:
+            panel_rec = await _lookup_panel_user(ident, cfg)
+
+    user = _provision_sso_user(payload, cfg, panel_record=panel_rec)
 
     session_payload = {
         "sub": user.get("id") or user.get("email") or user.get("username"),
@@ -1325,6 +1379,7 @@ async def sync_from_panel(
             "position_title": position_title,
             "division_code": div_code,
             "role": mapped_role,
+            "avatar_url": _extract_avatar_url(rec, rec, cfg),
             "is_active": bool(rec.get("isActive", rec.get("is_active", True))),
         }
         synced.append(db.upsert_user(user_data))
@@ -1410,4 +1465,96 @@ def delete_my_signature(
     db.set_user_signature(user["id"], "")
     actor_id = user.get("email") or user.get("username") or "user"
     db.add_audit_log(None, actor_id, "signature_deleted", {})
+    return {"ok": True}
+
+
+_AVATAR_EXTENSIONS = (".webp", ".png", ".jpg", ".jpeg")
+_MAX_AVATAR_BYTES = 3 * 1024 * 1024
+
+
+def _safe_avatar_stem(user_id: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(user_id))
+
+
+def _clear_local_avatar_files(user_id: str) -> None:
+    stem = _safe_avatar_stem(user_id)
+    for ext in _AVATAR_EXTENSIONS:
+        candidate = AVATARS_DIR / f"{stem}{ext}"
+        if candidate.exists() and candidate.is_file():
+            try:
+                candidate.unlink()
+            except Exception:
+                pass
+
+
+def _find_local_avatar_file(user_id: str) -> Path | None:
+    stem = _safe_avatar_stem(user_id)
+    for ext in _AVATAR_EXTENSIONS:
+        candidate = AVATARS_DIR / f"{stem}{ext}"
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+@router.post("/avatar")
+async def upload_avatar(
+    file: UploadFile = File(...),
+    x_user_email: str | None = Header(default=None),
+    x_user_identifier: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+    cric_sso_session: str | None = Cookie(default=None),
+):
+    user = resolve_current_user(
+        x_user_email=x_user_email,
+        x_user_identifier=x_user_identifier,
+        authorization=authorization,
+        cookie_session=cric_sso_session,
+    )
+    ext = Path(file.filename or "avatar.png").suffix.lower()
+    if ext not in _AVATAR_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="รองรับเฉพาะไฟล์ภาพ .png, .jpg, .jpeg หรือ .webp")
+
+    raw_bytes = await file.read()
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="ไฟล์ภาพว่างเปล่า")
+    if len(raw_bytes) > _MAX_AVATAR_BYTES:
+        raise HTTPException(status_code=400, detail="ขนาดไฟล์รูปโปรไฟล์ต้องไม่เกิน 3 MB")
+
+    _clear_local_avatar_files(user["id"])
+    stem = _safe_avatar_stem(user["id"])
+    dest = AVATARS_DIR / f"{stem}{ext}"
+    dest.write_bytes(raw_bytes)
+
+    avatar_url = f"/v1/auth/users/{user['id']}/avatar?v={int(time.time())}"
+    db.set_user_avatar(user["id"], avatar_url)
+    actor_id = user.get("email") or user.get("username") or user["id"]
+    db.add_audit_log(None, actor_id, "avatar_uploaded", {"path": dest.name})
+    return {"ok": True, "avatar_url": avatar_url}
+
+
+@router.get("/users/{user_id}/avatar")
+def get_user_avatar(user_id: str):
+    avatar_path = _find_local_avatar_file(user_id)
+    if not avatar_path:
+        raise HTTPException(status_code=404, detail="ไม่พบรูปโปรไฟล์")
+    return FileResponse(avatar_path, headers={"Cache-Control": "public, max-age=300"})
+
+
+@router.delete("/avatar")
+def delete_my_avatar(
+    x_user_email: str | None = Header(default=None),
+    x_user_identifier: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+    cric_sso_session: str | None = Cookie(default=None),
+):
+    user = resolve_current_user(
+        x_user_email=x_user_email,
+        x_user_identifier=x_user_identifier,
+        authorization=authorization,
+        cookie_session=cric_sso_session,
+    )
+    _clear_local_avatar_files(user["id"])
+    db.set_user_avatar(user["id"], "")
+    actor_id = user.get("email") or user.get("username") or user["id"]
+    db.add_audit_log(None, actor_id, "avatar_deleted", {})
     return {"ok": True}

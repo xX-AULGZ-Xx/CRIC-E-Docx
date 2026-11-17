@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS users (
   default_reviewer_email TEXT DEFAULT '',
   role TEXT NOT NULL DEFAULT 'drafter', -- drafter | unit_head | deputy_director | director | saraban_admin
   signature_storage_path TEXT DEFAULT '',
+  avatar_url TEXT DEFAULT '',
   is_active BOOLEAN NOT NULL DEFAULT true,
   synced_at TIMESTAMPTZ DEFAULT now()
 );

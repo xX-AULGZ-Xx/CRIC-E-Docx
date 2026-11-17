@@ -86,6 +86,7 @@ class Database:
                     conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS unit_name TEXT DEFAULT '';")
                     conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT '';")
                     conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS default_reviewer_email TEXT DEFAULT '';")
+                    conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT DEFAULT '';")
                     conn.execute(
                         """
                         CREATE TABLE IF NOT EXISTS courses (
@@ -175,6 +176,7 @@ class Database:
                   default_reviewer_email TEXT DEFAULT '',
                   role TEXT NOT NULL DEFAULT 'drafter',
                   signature_storage_path TEXT DEFAULT '',
+                  avatar_url TEXT DEFAULT '',
                   is_active INTEGER NOT NULL DEFAULT 1,
                   synced_at TEXT
                 );
@@ -300,6 +302,7 @@ class Database:
                 "ALTER TABLE users ADD COLUMN unit_name TEXT DEFAULT '';",
                 "ALTER TABLE users ADD COLUMN phone TEXT DEFAULT '';",
                 "ALTER TABLE users ADD COLUMN default_reviewer_email TEXT DEFAULT '';",
+                "ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT '';",
             ):
                 try:
                     conn.execute(alter_sql)
@@ -481,6 +484,16 @@ class Database:
             else (existing.get("default_reviewer_email", "") if existing else "")
         )
         role = data.get("role") or (existing["role"] if existing else "drafter")
+        incoming_avatar = str(data["avatar_url"]).strip() if "avatar_url" in data and data["avatar_url"] is not None else None
+        existing_avatar = str(existing.get("avatar_url") or "").strip() if existing else ""
+        if existing_avatar.startswith("/v1/auth/users/") and incoming_avatar and not incoming_avatar.startswith("/v1/auth/users/"):
+            avatar_url = existing_avatar
+        elif incoming_avatar is not None and incoming_avatar != "":
+            avatar_url = incoming_avatar
+        elif "avatar_url" in data and data["avatar_url"] == "":
+            avatar_url = ""
+        else:
+            avatar_url = existing_avatar
         raw_active = data.get("is_active", existing.get("is_active", True) if existing else True)
         is_active = bool(raw_active) if self.use_pg else (1 if raw_active else 0)
 
@@ -501,6 +514,7 @@ class Database:
                       phone = {p},
                       default_reviewer_email = {p},
                       role = {p},
+                      avatar_url = {p},
                       is_active = {p},
                       synced_at = {p}
                     WHERE id = {p}
@@ -517,6 +531,7 @@ class Database:
                         phone,
                         default_reviewer_email,
                         role,
+                        avatar_url,
                         is_active,
                         now,
                         user_id,
@@ -529,9 +544,9 @@ class Database:
                     INSERT INTO users (
                       id, sso_subject, panel_user_id, username, email, full_name,
                       position_title, division_code, unit_name, phone, default_reviewer_email,
-                      role, is_active, synced_at
+                      role, avatar_url, is_active, synced_at
                     )
-                    VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
+                    VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
                     """,
                     (
                         user_id,
@@ -546,6 +561,7 @@ class Database:
                         phone,
                         default_reviewer_email,
                         role,
+                        avatar_url,
                         is_active,
                         now,
                     ),
@@ -564,6 +580,17 @@ class Database:
             conn.execute(
                 f"UPDATE users SET signature_storage_path = {p} WHERE id = {p}",
                 (path, user["id"]),
+            )
+
+    def set_user_avatar(self, identifier: str, avatar_url: str) -> None:
+        user = self.get_user_by_identifier(identifier)
+        if not user:
+            return
+        p = self._ph()
+        with self._conn() as conn:
+            conn.execute(
+                f"UPDATE users SET avatar_url = {p} WHERE id = {p}",
+                (avatar_url, user["id"]),
             )
 
     def update_user_fields(self, identifier: str, updates: dict[str, Any]) -> dict[str, Any] | None:
