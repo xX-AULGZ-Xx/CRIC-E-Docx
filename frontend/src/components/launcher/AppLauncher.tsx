@@ -1,0 +1,456 @@
+'use client';
+
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { 
+  Grip, 
+  Pencil, 
+  Check, 
+  ExternalLink, 
+  Plus, 
+  X, 
+  Star, 
+  Globe, 
+  Layers 
+} from 'lucide-react';
+import { api, ServiceItem } from '@/lib/api';
+
+interface AppLauncherProps {
+  currentRole?: string;
+  isLoggedIn?: boolean;
+  onServicesChange?: () => void;
+}
+
+export function AppLauncher({ currentRole, isLoggedIn, onServicesChange }: AppLauncherProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [services, setServices] = useState<ServiceItem[]>([]);
+  const [panelUrl, setPanelUrl] = useState('https://panel.cric.ac.th');
+  const [loading, setLoading] = useState(true);
+  const [mounted, setMounted] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [buttonRect, setButtonRect] = useState<DOMRect | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  const isGuest = isLoggedIn !== undefined ? !isLoggedIn : (!currentRole || currentRole === 'guest');
+
+  const updatePosition = () => {
+    if (typeof window !== 'undefined') {
+      setIsMobile(window.innerWidth < 640);
+      if (buttonRef.current) {
+        setButtonRect(buttonRef.current.getBoundingClientRect());
+      }
+    }
+  };
+
+  useEffect(() => {
+    setMounted(true);
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, []);
+
+  const resolveIcon = (url?: string | null): string | undefined => {
+    if (!url) return undefined;
+    if (url.includes('cric-logo-borderless.png')) return '/icons/cric-logo-borderless.png';
+    if (url.includes('1793600486266-tab-icon.png')) return '/icons/1793600486266-tab-icon.png';
+    if (url.includes('1793600763812-tab-icon.png')) return '/icons/1793600763812-tab-icon.png';
+    return url;
+  };
+
+  const fetchServices = async () => {
+    try {
+      setLoading(true);
+      const roleToQuery = isGuest ? 'guest' : (currentRole || 'guest');
+      const res = await api.listServices(roleToQuery);
+      if (res?.services && Array.isArray(res.services)) {
+        if (res.panel_url) {
+          setPanelUrl(res.panel_url);
+        }
+
+        let favIds: string[] | null = null;
+        try {
+          const stored = window.localStorage.getItem('cric_launcher_favorites');
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            if (Array.isArray(parsed)) {
+              const validIds = new Set(res.services.map((s) => s.id));
+              const filtered = parsed.filter((id: string) => validIds.has(id));
+              if (filtered.length > 0 || parsed.length === 0) {
+                favIds = filtered;
+              }
+            }
+          }
+        } catch {
+          // ignore localStorage error
+        }
+
+        // Default favorites if none saved yet: use Panel flags or match the 3 core internal portals
+        if (favIds === null) {
+          const panelFavs = res.services
+            .filter((s) => s.isFavorite || (s as unknown as { isDefaultFavorite?: boolean }).isDefaultFavorite)
+            .map((s) => s.id);
+          if (panelFavs.length > 0) {
+            favIds = panelFavs;
+          } else {
+            favIds = res.services
+              .filter(
+                (s) =>
+                  s.url.includes('cric.ac.th/admin') ||
+                  s.url.includes('plan.cric.ac.th') ||
+                  s.url.includes('rcms.cric.ac.th')
+              )
+              .map((s) => s.id);
+          }
+        }
+
+        const finalFavIds = favIds;
+        const mapped = res.services.map((s) => {
+          const isFav = finalFavIds.includes(s.id);
+          const favOrder = isFav ? finalFavIds.indexOf(s.id) : 999;
+          return {
+            ...s,
+            iconUrl: resolveIcon(s.iconUrl || s.icon_url),
+            isFavorite: isFav,
+            favoriteOrder: favOrder,
+          };
+        });
+        setServices(mapped);
+      }
+    } catch (err) {
+      console.error('Failed to load services for launcher', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchServices();
+  }, [currentRole, isLoggedIn, isOpen]);
+
+  // Close on outside click
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as Node;
+      if (buttonRef.current && buttonRef.current.contains(target)) {
+        return;
+      }
+      if (popoverRef.current && popoverRef.current.contains(target)) {
+        return;
+      }
+      setIsOpen(false);
+      setIsEditMode(false);
+    }
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
+
+  const toggleFavorite = (serviceId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isGuest) return;
+    setServices((prev) => {
+      const updated = prev.map((s) =>
+        s.id === serviceId ? { ...s, isFavorite: !s.isFavorite } : s
+      );
+      const newFavIds = updated.filter((s) => s.isFavorite).map((s) => s.id);
+      try {
+        window.localStorage.setItem('cric_launcher_favorites', JSON.stringify(newFavIds));
+      } catch {
+        // ignore
+      }
+      return updated;
+    });
+    onServicesChange?.();
+  };
+
+  const favoriteServices = services
+    .filter((s) => s.isFavorite)
+    .sort((a, b) => (a.favoriteOrder ?? 999) - (b.favoriteOrder ?? 999));
+
+  const otherServices = services.filter((s) => !s.isFavorite);
+
+  const handleToggle = () => {
+    updatePosition();
+    setIsOpen(!isOpen);
+    if (isOpen || isGuest) {
+      setIsEditMode(false);
+    }
+  };
+
+  return (
+    <div className="relative inline-block" ref={containerRef}>
+      {/* 9-Dots Google Style Icon Button */}
+      <button
+        ref={buttonRef}
+        onClick={handleToggle}
+        title="CRIC E-Service Launcher"
+        aria-label="CRIC E-Service Launcher"
+        className={`p-2 rounded-full transition-all duration-200 flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-blue-500/50 ${
+          isOpen
+            ? 'bg-neutral-200 dark:bg-neutral-800 text-blue-600 dark:text-blue-400 shadow-md ring-2 ring-blue-500/40'
+            : 'text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800/80 active:scale-95'
+        }`}
+      >
+        <Grip className="w-5 h-5" />
+      </button>
+
+      {/* Google-Style Popover Menu rendered via Portal into body to escape clipping */}
+      {isOpen && mounted && createPortal(
+        <div
+          className="fixed inset-0 z-50 bg-black/40 sm:bg-transparent backdrop-blur-xs sm:backdrop-blur-none flex items-start justify-center sm:block pt-16 sm:pt-0 px-3 sm:px-0 animate-in fade-in duration-150"
+          onClick={() => {
+            setIsOpen(false);
+            setIsEditMode(false);
+          }}
+        >
+          <div
+            ref={popoverRef}
+            style={
+              isMobile
+                ? undefined
+                : {
+                    position: 'fixed',
+                    top: `${(buttonRect?.bottom ?? 60) + 8}px`,
+                    right: `${Math.max(16, window.innerWidth - (buttonRect?.right ?? 376))}px`,
+                  }
+            }
+            onClick={(e) => e.stopPropagation()}
+            className="w-full sm:w-[360px] max-w-[360px] max-h-[80vh] sm:max-h-[580px] overflow-hidden rounded-3xl bg-white dark:bg-[#1e1f20] border border-neutral-200 dark:border-[#3c4043] shadow-2xl flex flex-col text-neutral-800 dark:text-white animate-in zoom-in-95 duration-150 pointer-events-auto"
+          >
+            {/* Header: Favorites (Auth) or All Services (Guest) */}
+            <div className="px-5 pt-4 pb-2 flex items-center justify-between border-b border-neutral-100 dark:border-[#3c4043]/40">
+              <div className="flex items-center gap-2">
+                <span className="text-[15px] sm:text-[17px] font-medium tracking-tight text-neutral-900 dark:text-neutral-100">
+                  {isGuest ? 'บริการของวิทยาลัย' : 'รายการโปรด'}
+                </span>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 font-normal">
+                  {isGuest ? services.length : favoriteServices.length}
+                </span>
+              </div>
+
+              {!isGuest && (
+                <button
+                  onClick={() => setIsEditMode(!isEditMode)}
+                  className={`p-2 rounded-full transition-colors flex items-center justify-center ${
+                    isEditMode
+                      ? 'bg-blue-600 text-white hover:bg-blue-500'
+                      : 'bg-neutral-100 dark:bg-neutral-800/80 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white'
+                  }`}
+                  title={isEditMode ? 'Done editing' : 'Customize favorites'}
+                >
+                  {isEditMode ? <Check className="w-4 h-4" /> : <Pencil className="w-4 h-4" />}
+                </button>
+              )}
+            </div>
+
+            {/* Edit Mode Notice Banner (Auth only) */}
+            {!isGuest && isEditMode && (
+              <div className="bg-blue-50 dark:bg-blue-950/60 border-b border-blue-200 dark:border-blue-900/60 px-4 py-2 text-xs text-blue-700 dark:text-blue-300 flex items-center justify-between">
+                <span>แตะ ✕ เพื่อลบ หรือ ＋ เพื่อเพิ่มรายการโปรด</span>
+                <button
+                  onClick={() => setIsEditMode(false)}
+                  className="font-semibold underline hover:text-blue-900 dark:hover:text-white"
+                >
+                  เสร็จสิ้น
+                </button>
+              </div>
+            )}
+
+            {/* Body Content */}
+            <div className="flex-1 overflow-y-auto px-3 py-3 custom-scrollbar">
+              {loading ? (
+                <div className="py-12 flex flex-col items-center justify-center text-neutral-400 gap-2">
+                  <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                  <span className="text-xs">กำลังโหลดบริการ...</span>
+                </div>
+              ) : services.length === 0 ? (
+                <div className="py-10 text-center px-4">
+                  <Layers className="w-10 h-10 text-neutral-400 dark:text-neutral-600 mx-auto mb-2" />
+                  <p className="text-sm text-neutral-700 dark:text-neutral-300 font-medium">ยังไม่มีบริการในระบบ</p>
+                  <p className="text-xs text-neutral-500 mt-1">
+                    ผู้ดูแลระบบ (Admin) สามารถเพิ่มบริการใหม่ผ่าน CRIC E-Service Panel
+                  </p>
+                </div>
+              ) : isGuest ? (
+                /* Guest Mode: Clean 3-column grid of all available public services */
+                <div className="grid grid-cols-3 gap-2 px-1 py-1">
+                  {services.map((service) => (
+                    <ServiceLauncherItem
+                      key={service.id}
+                      service={service}
+                      isEditMode={false}
+                      isFavorite={false}
+                      onToggleFavorite={() => {}}
+                    />
+                  ))}
+                </div>
+              ) : (
+                /* Authenticated Mode: Favorites + More Services */
+                <>
+                  {/* 3-Column Grid for Favorites */}
+                  {favoriteServices.length > 0 ? (
+                    <div className="grid grid-cols-3 gap-2 px-1 py-1">
+                      {favoriteServices.map((service) => (
+                        <ServiceLauncherItem
+                          key={service.id}
+                          service={service}
+                          isEditMode={isEditMode}
+                          isFavorite={true}
+                          onToggleFavorite={(e) => toggleFavorite(service.id, e)}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="py-6 text-center text-xs text-neutral-500 px-4 bg-neutral-50 dark:bg-neutral-900/40 rounded-2xl mx-1 my-2">
+                      <Star className="w-5 h-5 text-neutral-400 dark:text-neutral-600 mx-auto mb-1" />
+                      ยังไม่มีรายการโปรด แตะไอคอนดินสอเพื่อเลือกบริการที่ใช้งานบ่อย
+                    </div>
+                  )}
+
+                  {/* More Services Section */}
+                  {otherServices.length > 0 && (
+                    <div className="mt-4 pt-3 border-t border-neutral-100 dark:border-[#3c4043]/40">
+                      <div className="px-2 mb-2 flex items-center justify-between">
+                        <span className="text-xs font-medium uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                          บริการอื่นๆ
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 px-1">
+                        {otherServices.map((service) => (
+                          <ServiceLauncherItem
+                            key={service.id}
+                            service={service}
+                            isEditMode={isEditMode}
+                            isFavorite={false}
+                            onToggleFavorite={(e) => toggleFavorite(service.id, e)}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Footer Bar */}
+            <div className="px-4 py-3 bg-neutral-50 dark:bg-[#18191a] border-t border-neutral-200 dark:border-[#3c4043]/50 flex items-center justify-between text-xs text-neutral-500 dark:text-neutral-400">
+              <span className="flex items-center gap-1.5 font-medium text-neutral-700 dark:text-neutral-300">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
+                CRIC E-Service Panel
+              </span>
+              <a
+                href={`${panelUrl}/admin/services`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+              >
+                Admin Setup
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
+interface ServiceLauncherItemProps {
+  service: ServiceItem;
+  isEditMode: boolean;
+  isFavorite: boolean;
+  onToggleFavorite: (e: React.MouseEvent) => void;
+}
+
+function ServiceLauncherItem({
+  service,
+  isEditMode,
+  isFavorite,
+  onToggleFavorite,
+}: ServiceLauncherItemProps) {
+  const handleClick = (e: React.MouseEvent) => {
+    if (isEditMode) {
+      onToggleFavorite(e);
+      return;
+    }
+    if (service.openInNewTab !== false) {
+      window.open(service.url, '_blank', 'noopener,noreferrer');
+    } else {
+      window.location.href = service.url;
+    }
+  };
+
+  return (
+    <div
+      onClick={handleClick}
+      title={`${service.title}${service.description ? ` - ${service.description}` : ''}`}
+      className={`group relative flex flex-col items-center justify-start p-2 rounded-2xl cursor-pointer transition-all duration-150 select-none ${
+        isEditMode
+          ? 'hover:bg-neutral-100 dark:hover:bg-neutral-800/90 ring-1 ring-neutral-200 dark:ring-neutral-700/50'
+          : 'hover:bg-neutral-100 dark:hover:bg-neutral-800/80 active:scale-95'
+      }`}
+    >
+      {/* Edit Mode Badge (Minus or Plus) */}
+      {isEditMode && (
+        <button
+          onClick={onToggleFavorite}
+          className={`absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-white shadow-md z-10 transition-transform hover:scale-110 ${
+            isFavorite ? 'bg-rose-500 hover:bg-rose-600' : 'bg-emerald-600 hover:bg-emerald-500'
+          }`}
+          title={isFavorite ? 'นำออกจากรายการโปรด' : 'เพิ่มในรายการโปรด'}
+        >
+          {isFavorite ? <X className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
+        </button>
+      )}
+
+      {/* App Icon Container */}
+      <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-1.5 transition-transform duration-200 group-hover:scale-105 overflow-hidden">
+        {service.iconUrl ? (
+          <img
+            src={service.iconUrl}
+            alt=""
+            className="w-10 h-10 object-contain drop-shadow-sm"
+            onError={(e) => {
+              const el = e.target as HTMLElement;
+              el.style.display = 'none';
+              const parent = el.parentElement;
+              if (parent) {
+                parent.classList.add('bg-neutral-100', 'dark:bg-neutral-800');
+                if (!parent.querySelector('svg')) {
+                  const fallback = document.createElement('span');
+                  fallback.innerHTML = '🌐';
+                  fallback.className = 'text-xl select-none';
+                  parent.appendChild(fallback);
+                }
+              }
+            }}
+          />
+        ) : (
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white shadow-sm">
+            <Globe className="w-5 h-5" />
+          </div>
+        )}
+      </div>
+
+      {/* App Name */}
+      <span className="text-[12px] font-normal text-neutral-700 dark:text-neutral-200 text-center line-clamp-1 max-w-[84px] group-hover:text-neutral-950 dark:group-hover:text-white leading-tight">
+        {service.title}
+      </span>
+    </div>
+  );
+}
+
+export default AppLauncher;
+

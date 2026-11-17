@@ -1,0 +1,31 @@
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Python / FastAPI backend
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+backend/storage/
+backend/app/storage/
+*.db
+*.sqlite
+*.sqlite3
+
+# Next.js / Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/tsconfig.tsbuildinfo
+next-env.d.ts
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

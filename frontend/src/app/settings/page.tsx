@@ -1,0 +1,1349 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Layers } from "lucide-react";
+import { AdminTemplatesTab } from "@/components/AdminTemplatesTab";
+import { confirmAction, confirmDanger, toastError, toastSuccess } from "@/lib/swal";
+import {
+  Activity,
+  Bell,
+  Building2,
+  Copy,
+  Link2,
+  Plus,
+  RefreshCw,
+  Save,
+  ShieldAlert,
+  Sparkles,
+  Trash2,
+  Upload,
+  Users,
+} from "lucide-react";
+import {
+  AdminSettingsResponse,
+  api,
+  AuditLogEntry,
+  DiagnosticsInfo,
+  OrgProfile,
+  UserProfile,
+} from "@/lib/api";
+
+type TabId = "org" | "users" | "integrations" | "ai_linter" | "templates" | "audit";
+
+const TABS: Array<{ id: TabId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
+  { id: "org", label: "หน่วยงาน & ฝ่ายงาน", icon: Building2 },
+  { id: "users", label: "บุคลากร & ลายเซ็น", icon: Users },
+  { id: "integrations", label: "SSO, Panel & แจ้งเตือน", icon: Link2 },
+  { id: "ai_linter", label: "AI, ฟอนต์ & กฎตรวจคำ", icon: Sparkles },
+  { id: "templates", label: "แม่แบบเอกสาร", icon: Layers },
+  { id: "audit", label: "Audit Logs & สถานะระบบ", icon: Activity },
+];
+
+export default function SettingsPage() {
+  const [tab, setTab] = useState<TabId>("org");
+  const [forbidden, setForbidden] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [errMsg, setErrMsg] = useState("");
+
+  // Admin data
+  const [settings, setSettings] = useState<AdminSettingsResponse | null>(null);
+  const [org, setOrg] = useState<OrgProfile | null>(null);
+  const [newDivCode, setNewDivCode] = useState("");
+  const [newDivName, setNewDivName] = useState("");
+
+  // Users
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [newUsername, setNewUsername] = useState("");
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserTitle, setNewUserTitle] = useState("");
+  const [newUserDiv, setNewUserDiv] = useState("ฝบ.");
+  const [newUserRole, setNewUserRole] = useState("drafter");
+
+  // Integrations & Notifications
+  const [ssoIssuer, setSsoIssuer] = useState("https://sso.cric.ac.th/realms/cric-college");
+  const [ssoRealm, setSsoRealm] = useState("cric-college");
+  const [ssoClientId, setSsoClientId] = useState("cric-edocx");
+  const [ssoClientSecret, setSsoClientSecret] = useState("");
+  const [allowedDomain, setAllowedDomain] = useState("cric.ac.th");
+  const [authDevMode, setAuthDevMode] = useState(true);
+  const [panelUrl, setPanelUrl] = useState("http://localhost:3000");
+  const [panelToken, setPanelToken] = useState("");
+  const [panelSyncSecret, setPanelSyncSecret] = useState("");
+  const [ssoRedirectHint, setSsoRedirectHint] = useState("");
+  const [ssoLogoutHint, setSsoLogoutHint] = useState("");
+
+  const [notifEnabled, setNotifEnabled] = useState(false);
+  const [notifProvider, setNotifProvider] = useState("custom_webhook");
+  const [notifWebhookUrl, setNotifWebhookUrl] = useState("");
+  const [notifChatId, setNotifChatId] = useState("");
+  const [notifEvents, setNotifEvents] = useState<string[]>(["submitted", "approved", "returned", "numbered"]);
+
+  // AI & Linter & Defaults
+  const [aiEnabled, setAiEnabled] = useState(true);
+  const [togglingAi, setTogglingAi] = useState(false);
+  const [aiProvider, setAiProvider] = useState("gemini");
+  const [aiModel, setAiModel] = useState("gemini-2.5-flash");
+  const [aiBaseUrl, setAiBaseUrl] = useState("");
+  const [aiKey, setAiKey] = useState("");
+  const [aiCustomPrompt, setAiCustomPrompt] = useState("");
+  const [defaultFont, setDefaultFont] = useState("TH Sarabun New");
+  const [autoPreviewDefault, setAutoPreviewDefault] = useState(true);
+  const [misspellingsText, setMisspellingsText] = useState("");
+  const [forbiddenText, setForbiddenText] = useState("");
+
+  // Audit & Diagnostics
+  const [logs, setLogs] = useState<AuditLogEntry[]>([]);
+  const [logQuery, setLogQuery] = useState("");
+  const [diag, setDiag] = useState<DiagnosticsInfo | null>(null);
+
+  async function loadAll() {
+    setErrMsg("");
+    setForbidden(false);
+    try {
+      const [adm, usrRes, logRes, diagRes, ssoCfgRes] = await Promise.all([
+        api.getAdminSettings(),
+        api.listUsers(),
+        api.getAuditLogs(logQuery),
+        api.getDiagnostics(),
+        api.getSsoConfig().catch(() => null),
+      ]);
+      setSettings(adm);
+      if (ssoCfgRes?.suggested_redirect_uri) setSsoRedirectHint(ssoCfgRes.suggested_redirect_uri);
+      if (ssoCfgRes?.suggested_post_logout_uri) setSsoLogoutHint(ssoCfgRes.suggested_post_logout_uri);
+      setOrg(adm.org_profile);
+
+      setSsoIssuer(adm.integrations.sso_issuer);
+      setSsoRealm(adm.integrations.sso_realm || "cric-college");
+      setSsoClientId(adm.integrations.sso_client_id);
+      setAllowedDomain(adm.integrations.allowed_domain);
+      setAuthDevMode(adm.integrations.auth_dev_mode);
+      setPanelUrl(adm.integrations.panel_api_url);
+
+      setNotifEnabled(adm.notifications.enabled);
+      setNotifProvider(adm.notifications.provider);
+      setNotifChatId(adm.notifications.telegram_chat_id);
+      setNotifEvents(adm.notifications.events);
+
+      setAiEnabled(adm.ai_provider.enabled !== false);
+      setAiProvider(adm.ai_provider.provider);
+      setAiModel(adm.ai_provider.model);
+      setAiBaseUrl(adm.ai_provider.base_url);
+      setAiCustomPrompt(adm.ai_provider.custom_system_prompt || "");
+      setDefaultFont(adm.default_font);
+      setAutoPreviewDefault(adm.auto_preview_default);
+
+      const mPairs = Object.entries(adm.linter_rules.custom_misspellings || {}).map(([k, v]) => `${k}=${v}`);
+      setMisspellingsText(mPairs.join("\n"));
+      setForbiddenText((adm.linter_rules.custom_forbidden_phrases || []).join("\n"));
+
+      setUsers(usrRes.users);
+      setLogs(logRes.logs);
+      setDiag(diagRes);
+    } catch (err) {
+      const m = err instanceof Error ? err.message : "โหลดการตั้งค่าไม่สำเร็จ";
+      if (m.includes("เฉพาะเจ้าหน้าที่สารบรรณ") || m.includes("403")) {
+        setForbidden(true);
+      } else {
+        setErrMsg(m);
+      }
+    }
+  }
+
+  useEffect(() => {
+    loadAll();
+    const handler = () => loadAll();
+    window.addEventListener("cric-user-changed", handler);
+    return () => window.removeEventListener("cric-user-changed", handler);
+  }, []);
+
+  async function saveOrg() {
+    if (!org) return;
+    setMsg("");
+    setErrMsg("");
+    try {
+      await api.updateOrgProfile(org);
+      const m = "บันทึกข้อมูลหน่วยงาน ผู้บริหาร และฝ่ายงานเรียบร้อยแล้ว";
+      setMsg(m);
+      toastSuccess("บันทึกข้อมูลหน่วยงานแล้ว");
+      await loadAll();
+    } catch (err) {
+      const m = err instanceof Error ? err.message : "บันทึกไม่สำเร็จ";
+      setErrMsg(m);
+      toastError("บันทึกข้อมูลหน่วยงานไม่สำเร็จ", m);
+    }
+  }
+
+  async function handleDeleteDivision(code: string, divName: string) {
+    if (!org) return;
+    const ok = await confirmDanger({
+      title: `ลบฝ่ายงาน "${code} ${divName}"?`,
+      text: "รายชื่อฝ่ายงานนี้จะถูกลบออกจากตัวเลือกแบบฟอร์ม (กรุณากดบันทึกข้อมูลหน่วยงานเพื่อยืนยันถาวร)",
+      confirmText: "ลบฝ่ายงาน",
+    });
+    if (!ok) return;
+    const copy = { ...org.divisions };
+    delete copy[code];
+    setOrg({ ...org, divisions: copy });
+    toastSuccess(`นำฝ่ายงาน ${code} ออกจากรายการแล้ว`, "อย่าลืมกดบันทึกข้อมูลหน่วยงานด้านล่าง");
+  }
+
+  async function saveIntegrations(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg("");
+    setErrMsg("");
+    try {
+      await api.updateIntegrations({
+        sso_issuer: ssoIssuer,
+        sso_realm: ssoRealm,
+        sso_client_id: ssoClientId,
+        sso_client_secret: ssoClientSecret,
+        allowed_domain: allowedDomain,
+        auth_dev_mode: authDevMode,
+        panel_api_url: panelUrl,
+        panel_api_token: panelToken,
+        panel_sync_secret: panelSyncSecret,
+      });
+      setSsoClientSecret("");
+      setPanelToken("");
+      setPanelSyncSecret("");
+      setMsg("บันทึกการตั้งค่า SSO และ Panel เรียบร้อยแล้ว");
+      toastSuccess("บันทึกการเชื่อมต่อ SSO / Panel แล้ว");
+      await loadAll();
+    } catch (err) {
+      const m = err instanceof Error ? err.message : "บันทึกไม่สำเร็จ";
+      setErrMsg(m);
+      toastError("บันทึกการเชื่อมต่อไม่สำเร็จ", m);
+    }
+  }
+
+  async function handleTestConn(target: "sso" | "panel") {
+    setMsg("");
+    setErrMsg("");
+    const res = await api.testIntegration(target);
+    if (res.ok) {
+      const m = `เชื่อมต่อ ${target.toUpperCase()} สำเร็จ (HTTP ${res.status_code}, ${res.latency_ms} ms)`;
+      setMsg(m);
+      toastSuccess(`เชื่อมต่อ ${target.toUpperCase()} สำเร็จ`, `${res.latency_ms} ms`);
+    } else {
+      const m = `เชื่อมต่อ ${target.toUpperCase()} ไม่สำเร็จ: ${res.error || `HTTP ${res.status_code}`}`;
+      setErrMsg(m);
+      toastError(`เชื่อมต่อ ${target.toUpperCase()} ไม่สำเร็จ`, res.error || `HTTP ${res.status_code}`);
+    }
+  }
+
+  async function saveNotifications(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg("");
+    setErrMsg("");
+    try {
+      await api.updateNotifications({
+        enabled: notifEnabled,
+        provider: notifProvider,
+        webhook_url: notifWebhookUrl,
+        telegram_chat_id: notifChatId,
+        events: notifEvents,
+      });
+      setNotifWebhookUrl("");
+      setMsg("บันทึกการตั้งค่าการแจ้งเตือน Webhook เรียบร้อยแล้ว");
+      toastSuccess("บันทึกการตั้งค่าแจ้งเตือนแล้ว");
+      await loadAll();
+    } catch (err) {
+      const m = err instanceof Error ? err.message : "บันทึกไม่สำเร็จ";
+      setErrMsg(m);
+      toastError("บันทึกการแจ้งเตือนไม่สำเร็จ", m);
+    }
+  }
+
+  async function handleTestNotif() {
+    setMsg("");
+    setErrMsg("");
+    const res = await api.testNotifications();
+    if (res.ok) {
+      const m = `ส่งข้อความทดสอบ Webhook สำเร็จ (${res.detail})`;
+      setMsg(m);
+      toastSuccess("ส่งข้อความทดสอบ Webhook สำเร็จ");
+    } else {
+      const m = `ทดสอบ Webhook ไม่สำเร็จ: ${res.detail}`;
+      setErrMsg(m);
+      toastError("ทดสอบ Webhook ไม่สำเร็จ", res.detail);
+    }
+  }
+
+  async function handleToggleAiCopilot(nextEnabled: boolean) {
+    if (!nextEnabled) {
+      const ok = await confirmAction({
+        title: "ปิดใช้งาน AI Co-pilot ชั่วคราว?",
+        text: "ผู้ใช้ทั้งหมดจะไม่เห็นปุ่มผู้ช่วยร่าง AI และ API ที่เกี่ยวกับ AI จะถูกปิดชั่วคราว จนกว่าผู้ดูแลระบบจะเปิดใช้งานอีกครั้ง",
+        confirmText: "ยืนยันปิดใช้งาน",
+        icon: "warning",
+      });
+      if (!ok) return;
+    }
+    setTogglingAi(true);
+    setMsg("");
+    setErrMsg("");
+    try {
+      const res = await api.toggleAiCopilot(nextEnabled);
+      setAiEnabled(res.enabled);
+      const m = res.enabled
+        ? "เปิดใช้งาน AI Co-pilot สำหรับผู้ใช้ทุกคนแล้ว"
+        : "ปิดใช้งาน AI Co-pilot ชั่วคราวเรียบร้อยแล้ว";
+      setMsg(m);
+      toastSuccess(res.enabled ? "เปิดใช้งาน AI Co-pilot แล้ว" : "ปิดใช้งาน AI Co-pilot แล้ว");
+      await loadAll();
+    } catch (err) {
+      const m = err instanceof Error ? err.message : "สลับสถานะ AI Co-pilot ไม่สำเร็จ";
+      setErrMsg(m);
+      toastError("สลับสถานะ AI Co-pilot ไม่สำเร็จ", m);
+    } finally {
+      setTogglingAi(false);
+    }
+  }
+
+  async function saveAiAndLinter(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg("");
+    setErrMsg("");
+    try {
+      await api.updateAiSettings({
+        enabled: aiEnabled,
+        provider: aiProvider,
+        model: aiModel,
+        base_url: aiBaseUrl,
+        api_key: aiKey,
+        custom_system_prompt: aiCustomPrompt,
+      });
+      const misspellingMap: Record<string, string> = {};
+      misspellingsText
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .forEach((line) => {
+          const [w, r] = line.split("=").map((s) => s.trim());
+          if (w && r) misspellingMap[w] = r;
+        });
+      const forbiddenList = forbiddenText
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      await api.updateLinterAndDefaults({
+        default_font: defaultFont,
+        auto_preview_default: autoPreviewDefault,
+        custom_misspellings: misspellingMap,
+        custom_forbidden_phrases: forbiddenList,
+      });
+      setAiKey("");
+      setMsg("บันทึกตั้งค่า AI, ฟอนต์เริ่มต้น และกฎตรวจคำเรียบร้อยแล้ว");
+      toastSuccess("บันทึกการตั้งค่า AI และกฎตรวจคำแล้ว");
+      await loadAll();
+    } catch (err) {
+      const m = err instanceof Error ? err.message : "บันทึกไม่สำเร็จ";
+      setErrMsg(m);
+      toastError("บันทึกการตั้งค่า AI ไม่สำเร็จ", m);
+    }
+  }
+
+  async function handleCreateUser(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg("");
+    setErrMsg("");
+    try {
+      await api.createUser({
+        username: newUsername.trim() || undefined,
+        email: newUserEmail.trim() || null,
+        full_name: newUserName.trim(),
+        position_title: newUserTitle.trim() || "เจ้าหน้าที่",
+        division_code: newUserDiv.trim(),
+        role: newUserRole,
+        is_active: true,
+      });
+      const createdName = newUserName.trim();
+      setNewUsername("");
+      setNewUserEmail("");
+      setNewUserName("");
+      setNewUserTitle("");
+      setMsg("เพิ่มผู้ใช้งานเรียบร้อยแล้ว");
+      toastSuccess("เพิ่มผู้ใช้งานเรียบร้อยแล้ว", createdName);
+      await loadAll();
+    } catch (err) {
+      const m = err instanceof Error ? err.message : "เพิ่มผู้ใช้ไม่สำเร็จ";
+      setErrMsg(m);
+      toastError("เพิ่มผู้ใช้ไม่สำเร็จ", m);
+    }
+  }
+
+  async function handleUpdateUser(u: UserProfile) {
+    setMsg("");
+    setErrMsg("");
+    const target = u.id || u.username || u.email;
+    if (!target) return;
+    try {
+      await api.updateUser(target, {
+        username: u.username,
+        email: u.email,
+        full_name: u.full_name,
+        position_title: u.position_title,
+        division_code: u.division_code,
+        role: u.role,
+        is_active: u.is_active,
+      });
+      setMsg(`อัปเดตข้อมูลผู้ใช้ ${u.full_name} (${u.username ? `@${u.username}` : (u.email || "")}) เรียบร้อยแล้ว`);
+      toastSuccess("อัปเดตข้อมูลผู้ใช้เรียบร้อย", u.full_name);
+      await loadAll();
+    } catch (err) {
+      const m = err instanceof Error ? err.message : "อัปเดตผู้ใช้ไม่สำเร็จ";
+      setErrMsg(m);
+      toastError("อัปเดตผู้ใช้ไม่สำเร็จ", m);
+    }
+  }
+
+  async function handleAdminSigUpload(targetId: string, file?: File) {
+    if (!file) return;
+    setMsg("");
+    setErrMsg("");
+    try {
+      await api.adminUploadSignature(targetId, file);
+      setMsg("อัปโหลดลายเซ็นให้ผู้ใช้เรียบร้อยแล้ว");
+      toastSuccess("อัปโหลดลายเซ็น PNG สำเร็จ");
+      await loadAll();
+    } catch (err) {
+      const m = err instanceof Error ? err.message : "อัปโหลดลายเซ็นไม่สำเร็จ";
+      setErrMsg(m);
+      toastError("อัปโหลดลายเซ็นไม่สำเร็จ", m);
+    }
+  }
+
+  async function handleCleanupPreviews() {
+    const ok = await confirmDanger({
+      title: "ล้างไฟล์พรีวิวชั่วคราว?",
+      text: "ไฟล์ตัวอย่างพรีวิวชั่วคราว (.png/.pdf/.docx) จะถูกล้างออกจากดิสก์เพื่อคืนพื้นที่ (ไม่กระทบเอกสารที่บันทึกไว้)",
+      confirmText: "ล้างไฟล์ชั่วคราว",
+    });
+    if (!ok) return;
+    const res = await api.cleanupPreviews();
+    const m = `ล้างไฟล์พรีวิวชั่วคราวแล้ว ${res.removed} ไฟล์`;
+    setMsg(m);
+    toastSuccess("ล้างไฟล์พรีวิวชั่วคราวแล้ว", `${res.removed} ไฟล์`);
+    const d = await api.getDiagnostics();
+    setDiag(d);
+  }
+
+  if (forbidden) {
+    return (
+      <div className="ledger-panel mx-auto max-w-xl border-amber-300 bg-amber-50 p-8 text-center">
+        <ShieldAlert className="mx-auto mb-3 h-10 w-10 text-amber-700" />
+        <h2 className="text-base font-bold text-amber-950">จำกัดสิทธิ์เฉพาะผู้ดูแลระบบหลังบ้าน</h2>
+        <p className="mt-1 text-sm text-amber-900">
+          บัญชีปัจจุบันไม่มีสิทธิ์เข้าถึงหน้าตั้งค่าระบบ (ต้องใช้บทบาท <code>saraban_admin</code> หรือ <code>director</code>)
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Crisp Underline Navigation Strip */}
+      <div className="ledger-panel overflow-x-auto">
+        <div className="flex min-w-max items-center border-b border-[#E2E8F0] px-2">
+          {TABS.map((t) => {
+            const Icon = t.icon;
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={`inline-flex items-center gap-1.5 border-b-2 px-4 py-3 text-xs font-semibold transition-colors ${
+                  active
+                    ? "border-[#1D4ED8] text-[#1E3A8A]"
+                    : "border-transparent text-[#475569] hover:text-[#0F172A]"
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {msg && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-medium text-emerald-900">{msg}</div>}
+      {errMsg && <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-medium text-[#991B1B]">{errMsg}</div>}
+
+      {/* TAB 1: Organization & Divisions */}
+      {tab === "org" && org && (
+        <section className="ledger-panel overflow-hidden">
+          <div className="ledger-panel-header">
+            <h2 className="text-sm font-bold text-[#0F172A]">ข้อมูลหน่วยงาน ผู้บริหาร และฝ่ายงาน</h2>
+          </div>
+          <div className="space-y-4 p-5">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">ชื่อหน่วยงาน / สถานศึกษา</label>
+                <input
+                  type="text"
+                  value={org.organization_name}
+                  onChange={(e) => setOrg({ ...org, organization_name: e.target.value })}
+                  className="ledger-input"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">คำนำหน้าเลขหนังสือส่งออก</label>
+                <input
+                  type="text"
+                  value={org.doc_number_prefix}
+                  onChange={(e) => setOrg({ ...org, doc_number_prefix: e.target.value })}
+                  className="ledger-input tabular-nums-th"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">ที่อยู่บรรทัดที่ 1</label>
+                <input
+                  type="text"
+                  value={org.address_lines[0] || ""}
+                  onChange={(e) => setOrg({ ...org, address_lines: [e.target.value, org.address_lines[1] || ""] })}
+                  className="ledger-input"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">ที่อยู่บรรทัดที่ 2</label>
+                <input
+                  type="text"
+                  value={org.address_lines[1] || ""}
+                  onChange={(e) => setOrg({ ...org, address_lines: [org.address_lines[0] || "", e.target.value] })}
+                  className="ledger-input"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">โทร/โทรสาร</label>
+                <input
+                  type="text"
+                  value={org.phone_fax}
+                  onChange={(e) => setOrg({ ...org, phone_fax: e.target.value })}
+                  className="ledger-input tabular-nums-th"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">อีเมลสารบรรณ</label>
+                <input
+                  type="text"
+                  value={org.email}
+                  onChange={(e) => setOrg({ ...org, email: e.target.value })}
+                  className="ledger-input"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">ชื่อผู้อำนวยการ / ผู้ลงนามหลัก</label>
+                <input
+                  type="text"
+                  value={org.director.name}
+                  onChange={(e) => setOrg({ ...org, director: { ...org.director, name: e.target.value } })}
+                  className="ledger-input"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">ตำแหน่งผู้ลงนามหลัก</label>
+                <input
+                  type="text"
+                  value={org.director.title}
+                  onChange={(e) => setOrg({ ...org, director: { ...org.director, title: e.target.value } })}
+                  className="ledger-input"
+                />
+              </div>
+            </div>
+
+            <div className="border-t border-[#E2E8F0] pt-4">
+              <h3 className="mb-2 text-xs font-bold text-[#0F172A]">ผู้ลงนามมาตรฐานในแบบ สผ.1 (กรอบความเห็น ข้อ 3–6)</h3>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-[#475569]">ข้อ 3 หัวหน้างานพัฒนายุทธศาสตร์ แผนงาน และงบประมาณ</label>
+                  <input
+                    type="text"
+                    value={org.sp1_signers?.plan_head || ""}
+                    onChange={(e) =>
+                      setOrg({
+                        ...org,
+                        sp1_signers: {
+                          plan_head: e.target.value,
+                          deputy_plan: org.sp1_signers?.deputy_plan || "",
+                          supplies_head: org.sp1_signers?.supplies_head || "",
+                          deputy_resource: org.sp1_signers?.deputy_resource || "",
+                        },
+                      })
+                    }
+                    className="ledger-input"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-[#475569]">ข้อ 4 รองผู้อำนวยการฝ่ายยุทธศาสตร์และแผนงาน</label>
+                  <input
+                    type="text"
+                    value={org.sp1_signers?.deputy_plan || ""}
+                    onChange={(e) =>
+                      setOrg({
+                        ...org,
+                        sp1_signers: {
+                          plan_head: org.sp1_signers?.plan_head || "",
+                          deputy_plan: e.target.value,
+                          supplies_head: org.sp1_signers?.supplies_head || "",
+                          deputy_resource: org.sp1_signers?.deputy_resource || "",
+                        },
+                      })
+                    }
+                    className="ledger-input"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-[#475569]">ข้อ 5 หัวหน้างานพัสดุ</label>
+                  <input
+                    type="text"
+                    value={org.sp1_signers?.supplies_head || ""}
+                    onChange={(e) =>
+                      setOrg({
+                        ...org,
+                        sp1_signers: {
+                          plan_head: org.sp1_signers?.plan_head || "",
+                          deputy_plan: org.sp1_signers?.deputy_plan || "",
+                          supplies_head: e.target.value,
+                          deputy_resource: org.sp1_signers?.deputy_resource || "",
+                        },
+                      })
+                    }
+                    className="ledger-input"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-[#475569]">ข้อ 6 รองผู้อำนวยการฝ่ายบริหารทรัพยากร</label>
+                  <input
+                    type="text"
+                    value={org.sp1_signers?.deputy_resource || ""}
+                    onChange={(e) =>
+                      setOrg({
+                        ...org,
+                        sp1_signers: {
+                          plan_head: org.sp1_signers?.plan_head || "",
+                          deputy_plan: org.sp1_signers?.deputy_plan || "",
+                          supplies_head: org.sp1_signers?.supplies_head || "",
+                          deputy_resource: e.target.value,
+                        },
+                      })
+                    }
+                    className="ledger-input"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="border-t border-[#E2E8F0] pt-4">
+              <h3 className="mb-2 text-xs font-bold text-[#0F172A]">รายชื่อฝ่ายงานและรหัสย่อ</h3>
+              <div className="space-y-2">
+                {Object.entries(org.divisions).map(([code, info]) => (
+                  <div key={code} className="grid grid-cols-1 gap-2 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] p-2.5 sm:grid-cols-12">
+                    <div className="sm:col-span-2">
+                      <input type="text" value={code} disabled className="ledger-input bg-slate-100 py-1.5 text-xs font-bold" />
+                    </div>
+                    <div className="sm:col-span-4">
+                      <input
+                        type="text"
+                        value={info.name}
+                        onChange={(e) =>
+                          setOrg({
+                            ...org,
+                            divisions: { ...org.divisions, [code]: { ...info, name: e.target.value } },
+                          })
+                        }
+                        className="ledger-input py-1.5 text-xs"
+                      />
+                    </div>
+                    <div className="sm:col-span-5">
+                      <input
+                        type="text"
+                        value={info.deputy_title}
+                        onChange={(e) =>
+                          setOrg({
+                            ...org,
+                            divisions: { ...org.divisions, [code]: { ...info, deputy_title: e.target.value } },
+                          })
+                        }
+                        className="ledger-input py-1.5 text-xs"
+                      />
+                    </div>
+                    <div className="flex items-center justify-end sm:col-span-1">
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteDivision(code, info.name)}
+                        className="rounded p-1.5 text-[#B91C1C] hover:bg-red-50"
+                        title="ลบฝ่ายงาน"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="รหัสย่อ (เช่น ฝพ.)"
+                  value={newDivCode}
+                  onChange={(e) => setNewDivCode(e.target.value)}
+                  className="ledger-input w-32 py-1.5 text-xs"
+                />
+                <input
+                  type="text"
+                  placeholder="ชื่อฝ่ายเต็ม (เช่น ฝ่ายพัฒนากิจการพิเศษ)"
+                  value={newDivName}
+                  onChange={(e) => setNewDivName(e.target.value)}
+                  className="ledger-input flex-1 py-1.5 text-xs"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!newDivCode.trim() || !newDivName.trim()) return;
+                    setOrg({
+                      ...org,
+                      divisions: {
+                        ...org.divisions,
+                        [newDivCode.trim()]: {
+                          name: newDivName.trim(),
+                          deputy_title: `รองผู้อำนวยการ${newDivName.trim()}`,
+                        },
+                      },
+                    });
+                    setNewDivCode("");
+                    setNewDivName("");
+                  }}
+                  className="inline-flex items-center gap-1 rounded-md bg-[#0F172A] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#1E293B]"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  เพิ่มฝ่ายงาน
+                </button>
+              </div>
+            </div>
+
+            <button type="button" onClick={saveOrg} className="inline-flex items-center gap-1.5 rounded-md bg-[#1D4ED8] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1E40AF]">
+              <Save className="h-4 w-4" />
+              บันทึกข้อมูลหน่วยงาน
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* TAB 2: Users, RBAC & Signatures */}
+      {tab === "users" && (
+        <section className="ledger-panel overflow-hidden">
+          <div className="ledger-panel-header flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-bold text-[#0F172A]">จัดการผู้ใช้งาน สิทธิ์ (RBAC) และลายเซ็นผู้บริหาร</h2>
+            <button
+              type="button"
+              onClick={async () => {
+                const res = await api.syncPanelUsers();
+                const m = `ซิงค์ข้อมูลจาก panel.cric.ac.th สำเร็จ (${res.synced_count} รายการ)`;
+                setMsg(m);
+                toastSuccess("ซิงค์ผู้ใช้จาก Panel สำเร็จ", `${res.synced_count} รายการ`);
+                await loadAll();
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              ซิงค์จาก panel.cric.ac.th
+            </button>
+          </div>
+
+          {/* Mobile (< md) Adaptive User Cards */}
+          <div className="divide-y divide-[#E2E8F0] md:hidden">
+            {users.map((u) => {
+              const targetId = u.id || u.username || u.email || "";
+              const handle = u.username ? `@${u.username}` : (u.email ? `@${u.email.split("@")[0]}` : "@user");
+              return (
+                <div key={targetId} className="space-y-2.5 p-3.5 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-bold text-[#0F172A]">{u.full_name}</span>
+                      <span className="rounded bg-[#EFF6FF] px-1.5 py-0.5 font-mono text-[11px] text-[#1E3A8A]">{handle}</span>
+                    </div>
+                    <label className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#334155]">
+                      <input
+                        type="checkbox"
+                        checked={u.is_active}
+                        onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, is_active: e.target.checked } : x)))}
+                        className="accent-[#1D4ED8]"
+                      />
+                      ใช้งาน
+                    </label>
+                  </div>
+                  <div className="font-mono text-[10px] text-[#64748B]">
+                    {u.email || <span className="italic">ไม่มีอีเมล (Panel User)</span>}
+                    {(u.unit_name || u.phone) && (
+                      <span className="ml-2 font-sans text-[#475569]">
+                        · {[u.unit_name, u.phone].filter(Boolean).join(" · ")}
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">ชื่อ–นามสกุล</label>
+                      <input
+                        type="text"
+                        value={u.full_name}
+                        onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, full_name: e.target.value } : x)))}
+                        placeholder="ชื่อ–นามสกุล"
+                        className="ledger-input py-1 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">ตำแหน่ง</label>
+                      <input
+                        type="text"
+                        value={u.position_title}
+                        onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, position_title: e.target.value } : x)))}
+                        className="ledger-input py-1 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">ฝ่าย</label>
+                      <input
+                        type="text"
+                        value={u.division_code}
+                        onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, division_code: e.target.value } : x)))}
+                        className="ledger-input py-1 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">บทบาท (Role)</label>
+                      <select
+                        value={u.role}
+                        onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, role: e.target.value as UserProfile["role"] } : x)))}
+                        className="ledger-input py-1 text-xs"
+                      >
+                        <option value="drafter">drafter (ผู้ร่าง)</option>
+                        <option value="unit_head">unit_head (หัวหน้างาน)</option>
+                        <option value="deputy_director">deputy_director (รอง ผอ.)</option>
+                        <option value="director">director (ผอ.)</option>
+                        <option value="saraban_admin">saraban_admin (สารบรรณกลาง)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                    <label className="inline-flex cursor-pointer items-center gap-1 rounded border border-[#CBD5E1] bg-[#F8FAFC] px-2.5 py-1.5 text-[11px] font-medium hover:bg-slate-100">
+                      <Upload className="h-3 w-3" />
+                      {u.signature_storage_path ? "เปลี่ยน PNG ลายเซ็น" : "อัปโหลด PNG ลายเซ็น"}
+                      <input type="file" accept="image/png,image/jpeg" onChange={(e) => handleAdminSigUpload(targetId, e.target.files?.[0])} className="hidden" />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateUser(u)}
+                      className="rounded-md bg-[#1D4ED8] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#1E40AF]"
+                    >
+                      บันทึก
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Desktop (>= md) User Table */}
+          <div className="hidden overflow-x-auto md:block">
+            <table className="ledger-table text-xs">
+              <thead>
+                <tr>
+                  <th>ชื่อ–สกุล / Handle / อีเมล</th>
+                  <th>ตำแหน่ง</th>
+                  <th>ฝ่าย</th>
+                  <th>Role</th>
+                  <th className="text-center">ใช้งาน</th>
+                  <th>ลายเซ็น PNG</th>
+                  <th>บันทึก</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((u) => {
+                  const targetId = u.id || u.username || u.email || "";
+                  const handle = u.username ? `@${u.username}` : (u.email ? `@${u.email.split("@")[0]}` : "@user");
+                  return (
+                    <tr key={targetId}>
+                      <td>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-semibold text-[#0F172A]">{u.full_name}</span>
+                          <span className="rounded bg-[#EFF6FF] px-1.5 py-0.5 font-mono text-[11px] text-[#1E3A8A]">{handle}</span>
+                        </div>
+                        <div className="mt-0.5 font-mono text-[10px] text-[#64748B]">
+                          {u.email || <span className="italic">ไม่มีอีเมล (Panel User)</span>}
+                        </div>
+                        <input
+                          type="text"
+                          value={u.full_name}
+                          onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, full_name: e.target.value } : x)))}
+                          placeholder="ชื่อ–นามสกุล"
+                          className="ledger-input mt-1 w-44 py-1 text-xs"
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="text"
+                          value={u.position_title}
+                          onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, position_title: e.target.value } : x)))}
+                          className="ledger-input w-44 py-1 text-xs"
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="text"
+                          value={u.division_code}
+                          onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, division_code: e.target.value } : x)))}
+                          className="ledger-input w-14 py-1 text-xs"
+                        />
+                      </td>
+                      <td>
+                        <select
+                          value={u.role}
+                          onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, role: e.target.value as UserProfile["role"] } : x)))}
+                          className="ledger-input py-1 text-xs"
+                        >
+                          <option value="drafter">drafter (ผู้ร่าง)</option>
+                          <option value="unit_head">unit_head (หัวหน้างาน)</option>
+                          <option value="deputy_director">deputy_director (รอง ผอ.)</option>
+                          <option value="director">director (ผอ.)</option>
+                          <option value="saraban_admin">saraban_admin (สารบรรณกลาง)</option>
+                        </select>
+                      </td>
+                      <td className="text-center">
+                        <input
+                          type="checkbox"
+                          checked={u.is_active}
+                          onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, is_active: e.target.checked } : x)))}
+                          className="accent-[#1D4ED8]"
+                        />
+                      </td>
+                      <td>
+                        <label className="inline-flex cursor-pointer items-center gap-1 rounded border border-[#CBD5E1] bg-[#F8FAFC] px-2 py-1 text-[11px] font-medium hover:bg-slate-100">
+                          <Upload className="h-3 w-3" />
+                          {u.signature_storage_path ? "เปลี่ยน PNG" : "อัปโหลด"}
+                          <input type="file" accept="image/png,image/jpeg" onChange={(e) => handleAdminSigUpload(targetId, e.target.files?.[0])} className="hidden" />
+                        </label>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateUser(u)}
+                          className="rounded-md bg-[#1D4ED8] px-2.5 py-1 text-xs font-semibold text-white hover:bg-[#1E40AF]"
+                        >
+                          บันทึก
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <form onSubmit={handleCreateUser} className="grid grid-cols-1 gap-2 border-t border-[#E2E8F0] bg-[#F8FAFC] p-4 text-xs sm:grid-cols-2 lg:grid-cols-7">
+            <input type="text" placeholder="Username (เช่น somchai)" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} className="ledger-input py-1.5 font-mono text-xs" />
+            <input type="email" placeholder="อีเมล (เว้นว่างได้)" value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} className="ledger-input py-1.5 text-xs" />
+            <input type="text" required placeholder="ชื่อ–สกุล" value={newUserName} onChange={(e) => setNewUserName(e.target.value)} className="ledger-input py-1.5 text-xs" />
+            <input type="text" required placeholder="ตำแหน่ง" value={newUserTitle} onChange={(e) => setNewUserTitle(e.target.value)} className="ledger-input py-1.5 text-xs" />
+            <input type="text" placeholder="ฝ่าย (ฝบ./ฝว.)" value={newUserDiv} onChange={(e) => setNewUserDiv(e.target.value)} className="ledger-input py-1.5 text-xs" />
+            <select value={newUserRole} onChange={(e) => setNewUserRole(e.target.value)} className="ledger-input py-1.5 text-xs">
+              <option value="drafter">drafter</option>
+              <option value="unit_head">unit_head</option>
+              <option value="deputy_director">deputy_director</option>
+              <option value="director">director</option>
+              <option value="saraban_admin">saraban_admin</option>
+            </select>
+            <button type="submit" className="rounded-md bg-[#0F172A] px-3 py-1.5 font-semibold text-white hover:bg-[#1E293B]">
+              + เพิ่มผู้ใช้
+            </button>
+          </form>
+        </section>
+      )}
+
+      {/* TAB 3: Integrations & Notifications */}
+      {tab === "integrations" && (
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+          <form onSubmit={saveIntegrations} className="ledger-panel overflow-hidden text-sm">
+            <div className="ledger-panel-header">
+              <h2 className="text-sm font-bold text-[#0F172A]">เชื่อมต่อ sso.cric.ac.th (Keycloak) และ panel.cric.ac.th</h2>
+            </div>
+            <div className="space-y-3 p-5">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">SSO Issuer URL (Keycloak OIDC Realm)</label>
+                <input type="text" value={ssoIssuer} onChange={(e) => setSsoIssuer(e.target.value)} placeholder="https://sso.cric.ac.th/realms/cric-college" className="ledger-input" />
+              </div>
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-[#475569]">Keycloak Realm</label>
+                  <input type="text" value={ssoRealm} onChange={(e) => setSsoRealm(e.target.value)} placeholder="cric-college" className="ledger-input" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-[#475569]">SSO Client ID</label>
+                  <input type="text" value={ssoClientId} onChange={(e) => setSsoClientId(e.target.value)} placeholder="cric-edocx" className="ledger-input" />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">
+                  SSO Client Secret {settings?.integrations.sso_client_secret_info.has_secret ? `(${settings.integrations.sso_client_secret_info.masked_preview})` : ""}
+                </label>
+                <input type="password" value={ssoClientSecret} onChange={(e) => setSsoClientSecret(e.target.value)} placeholder="เว้นว่างเพื่อคงค่าเดิม" className="ledger-input" />
+              </div>
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-[#475569]">Allowed Domain</label>
+                  <input type="text" value={allowedDomain} onChange={(e) => setAllowedDomain(e.target.value)} className="ledger-input" />
+                </div>
+                <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-[#0F172A] sm:pt-5">
+                  <input type="checkbox" checked={authDevMode} onChange={(e) => setAuthDevMode(e.target.checked)} className="accent-[#1D4ED8]" />
+                  เปิดโหมดสลับผู้ใช้จำลอง (Dev Switcher)
+                </label>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">Panel API URL (พอร์ทัลหลัก)</label>
+                <input type="text" value={panelUrl} onChange={(e) => setPanelUrl(e.target.value)} placeholder="http://localhost:3000 หรือ https://panel.cric.ac.th" className="ledger-input" />
+              </div>
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-[#475569]">
+                    Panel API Token {settings?.integrations.panel_api_token_info.has_secret ? `(${settings.integrations.panel_api_token_info.masked_preview})` : ""}
+                  </label>
+                  <input type="password" value={panelToken} onChange={(e) => setPanelToken(e.target.value)} placeholder="เว้นว่างเพื่อคงค่าเดิม" className="ledger-input" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-[#475569]">
+                    Panel Sync Secret {settings?.integrations.panel_sync_secret_info?.has_secret ? `(${settings.integrations.panel_sync_secret_info.masked_preview})` : ""}
+                  </label>
+                  <input type="password" value={panelSyncSecret} onChange={(e) => setPanelSyncSecret(e.target.value)} placeholder="เว้นว่างเพื่อคงค่าเดิม" className="ledger-input" />
+                </div>
+              </div>
+              <div className="rounded-md border border-blue-200 bg-[#EFF6FF] p-3 text-xs text-[#1E3A8A]">
+                <div className="mb-1.5 font-bold">ค่าสำหรับตั้งค่าใน Keycloak Client ({ssoClientId || "cric-edocx"})</div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2 rounded border border-blue-200 bg-white px-2.5 py-1.5">
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-semibold text-[#64748B]">Valid Redirect URI</div>
+                      <div className="truncate font-mono text-[11px] text-[#0F172A]">
+                        {ssoRedirectHint || (typeof window !== "undefined" ? `${window.location.origin}/v1/auth/sso/callback` : "/v1/auth/sso/callback")}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const val = ssoRedirectHint || `${window.location.origin}/v1/auth/sso/callback`;
+                        navigator.clipboard?.writeText(val);
+                        toastSuccess("คัดลอก Valid Redirect URI แล้ว", val);
+                      }}
+                      className="inline-flex shrink-0 items-center gap-1 rounded border border-[#CBD5E1] px-2 py-1 text-[11px] font-semibold text-[#334155] hover:bg-slate-50"
+                    >
+                      <Copy className="h-3 w-3" />
+                      คัดลอก
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 rounded border border-blue-200 bg-white px-2.5 py-1.5">
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-semibold text-[#64748B]">Valid Post Logout Redirect URI</div>
+                      <div className="truncate font-mono text-[11px] text-[#0F172A]">
+                        {ssoLogoutHint || (typeof window !== "undefined" ? `${window.location.origin}/` : "/")}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const val = ssoLogoutHint || `${window.location.origin}/`;
+                        navigator.clipboard?.writeText(val);
+                        toastSuccess("คัดลอก Post Logout URI แล้ว", val);
+                      }}
+                      className="inline-flex shrink-0 items-center gap-1 rounded border border-[#CBD5E1] px-2 py-1 text-[11px] font-semibold text-[#334155] hover:bg-slate-50"
+                    >
+                      <Copy className="h-3 w-3" />
+                      คัดลอก
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button type="submit" className="rounded-md bg-[#1D4ED8] px-4 py-2 text-xs font-semibold text-white hover:bg-[#1E40AF]">บันทึกการเชื่อมต่อ</button>
+                <button type="button" onClick={() => handleTestConn("sso")} className="rounded-md border border-[#CBD5E1] bg-white px-3 py-2 text-xs font-semibold text-[#0F172A] hover:bg-slate-50">ทดสอบ SSO</button>
+                <button type="button" onClick={() => handleTestConn("panel")} className="rounded-md border border-[#CBD5E1] bg-white px-3 py-2 text-xs font-semibold text-[#0F172A] hover:bg-slate-50">ทดสอบ Panel</button>
+              </div>
+            </div>
+          </form>
+
+          <form onSubmit={saveNotifications} className="ledger-panel overflow-hidden text-sm">
+            <div className="ledger-panel-header flex items-center justify-between">
+              <h2 className="flex items-center gap-2 text-sm font-bold text-[#0F172A]">
+                <Bell className="h-4 w-4 text-amber-600" />
+                แจ้งเตือนสถานะเอกสาร (Webhook)
+              </h2>
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs font-semibold text-[#0F172A]">
+                <input type="checkbox" checked={notifEnabled} onChange={(e) => setNotifEnabled(e.target.checked)} className="accent-[#1D4ED8]" />
+                เปิดใช้งาน
+              </label>
+            </div>
+            <div className="space-y-3 p-5">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">ช่องทางแจ้งเตือน</label>
+                <select value={notifProvider} onChange={(e) => setNotifProvider(e.target.value)} className="ledger-input">
+                  <option value="custom_webhook">Custom JSON Webhook</option>
+                  <option value="discord">Discord Webhook</option>
+                  <option value="telegram">Telegram Bot API (sendMessage)</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">
+                  Webhook URL {settings?.notifications.webhook_url_info.has_secret ? `(${settings.notifications.webhook_url_info.masked_preview})` : ""}
+                </label>
+                <input type="password" value={notifWebhookUrl} onChange={(e) => setNotifWebhookUrl(e.target.value)} placeholder="https://... (เว้นว่างเพื่อคงค่าเดิม)" className="ledger-input" />
+              </div>
+              {notifProvider === "telegram" && (
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-[#475569]">Telegram Chat ID</label>
+                  <input type="text" value={notifChatId} onChange={(e) => setNotifChatId(e.target.value)} className="ledger-input" />
+                </div>
+              )}
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">เหตุการณ์ที่แจ้งเตือน</label>
+                <div className="flex flex-wrap gap-3 text-xs text-[#0F172A]">
+                  {[
+                    ["submitted", "ส่งตรวจ"],
+                    ["approved", "อนุมัติ"],
+                    ["returned", "ส่งกลับแก้ไข"],
+                    ["numbered", "ออกเลขแล้ว"],
+                  ].map(([ev, lbl]) => (
+                    <label key={ev} className="flex cursor-pointer items-center gap-1">
+                      <input
+                        type="checkbox"
+                        checked={notifEvents.includes(ev)}
+                        onChange={(e) =>
+                          setNotifEvents((prev) => (e.target.checked ? [...prev, ev] : prev.filter((x) => x !== ev)))
+                        }
+                        className="accent-[#1D4ED8]"
+                      />
+                      {lbl}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 pt-2">
+                <button type="submit" className="rounded-md bg-[#1D4ED8] px-4 py-2 text-xs font-semibold text-white hover:bg-[#1E40AF]">บันทึกการแจ้งเตือน</button>
+                <button type="button" onClick={handleTestNotif} className="rounded-md border border-[#CBD5E1] bg-white px-3 py-2 text-xs font-semibold text-[#0F172A] hover:bg-slate-50">ทดสอบส่งข้อความ</button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* TAB 4: AI, Font Defaults & Custom Linter Rules */}
+      {tab === "ai_linter" && (
+        <form onSubmit={saveAiAndLinter} className="ledger-panel overflow-hidden text-sm">
+          <div className="ledger-panel-header">
+            <h2 className="text-sm font-bold text-[#0F172A]">AI Co-pilot ฟอนต์เริ่มต้น และกฎตรวจคำเฉพาะหน่วยงาน</h2>
+          </div>
+          <div className="space-y-4 p-5">
+            <div
+              className={`flex flex-col gap-3 rounded-md border p-4 sm:flex-row sm:items-center sm:justify-between ${
+                aiEnabled ? "border-emerald-200 bg-emerald-50/70" : "border-slate-300 bg-slate-100"
+              }`}
+            >
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-bold text-[#0F172A]">สถานะระบบผู้ช่วย AI Co-pilot</span>
+                  <span
+                    className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-bold ${
+                      aiEnabled ? "bg-emerald-700 text-white" : "bg-slate-600 text-white"
+                    }`}
+                  >
+                    {aiEnabled ? "เปิดใช้งาน (Active)" : "ปิดใช้งานชั่วคราว (Disabled)"}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-[#475569]">
+                  {aiEnabled
+                    ? "ผู้ใช้ทุกคนสามารถใช้ AI ช่วยร่างหนังสือ วัสดุฝึก แผนการสอน และเติมแบบฟอร์มแม่แบบได้"
+                    : "ผู้ดูแลระบบกำลังปิดใช้งาน AI Co-pilot ชั่วคราว ปุ่มผู้ช่วย AI ในทุกหน้าจะถูกซ่อนจากผู้ใช้"}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={togglingAi}
+                onClick={() => handleToggleAiCopilot(!aiEnabled)}
+                aria-pressed={aiEnabled}
+                className={`inline-flex shrink-0 items-center justify-center rounded-md px-4 py-2 text-xs font-bold shadow-sm transition-colors disabled:opacity-50 ${
+                  aiEnabled
+                    ? "border border-[#B91C1C] bg-white text-[#B91C1C] hover:bg-red-50"
+                    : "bg-[#1D4ED8] text-white hover:bg-[#1E40AF]"
+                }`}
+              >
+                {togglingAi ? "กำลังบันทึก..." : aiEnabled ? "ปิดใช้งาน AI Co-pilot" : "เปิดใช้งาน AI Co-pilot"}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">ผู้ให้บริการ AI</label>
+                <select
+                  value={aiProvider}
+                  onChange={(e) => {
+                    const p = e.target.value;
+                    setAiProvider(p);
+                    if (p === "gemini") setAiModel("gemini-2.5-flash");
+                    if (p === "openai") setAiModel("gpt-4o-mini");
+                    if (p === "local") setAiModel("llama3.1");
+                  }}
+                  className="ledger-input"
+                >
+                  <option value="gemini">Google Gemini</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="local">Local LLM (Ollama / vLLM)</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">โมเดล</label>
+                <input type="text" value={aiModel} onChange={(e) => setAiModel(e.target.value)} className="ledger-input" />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">
+                  API Key {settings?.ai_provider.api_key_info.has_secret ? `(${settings.ai_provider.api_key_info.masked_preview})` : ""}
+                </label>
+                <input type="password" value={aiKey} onChange={(e) => setAiKey(e.target.value)} placeholder="เว้นว่างเพื่อคงค่าเดิม" className="ledger-input" />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">Base URL (สำหรับ Local LLM / Proxy)</label>
+                <input type="text" value={aiBaseUrl} onChange={(e) => setAiBaseUrl(e.target.value)} className="ledger-input" />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">ฟอนต์เริ่มต้นของระบบ</label>
+                <select value={defaultFont} onChange={(e) => setDefaultFont(e.target.value)} className="ledger-input">
+                  <option value="TH Sarabun New">TH Sarabun New</option>
+                  <option value="TH SarabunIT๙">TH SarabunIT๙</option>
+                </select>
+              </div>
+              <label className="flex cursor-pointer items-center gap-2 pt-5 text-xs font-semibold text-[#0F172A]">
+                <input type="checkbox" checked={autoPreviewDefault} onChange={(e) => setAutoPreviewDefault(e.target.checked)} className="accent-[#1D4ED8]" />
+                เปิดอัปเดตตัวอย่างอัตโนมัติเป็นค่าเริ่มต้น
+              </label>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-[#475569]">คำสั่งเสริมสำหรับ AI (เช่น โทนภาษาหรือข้อกำหนดของวิทยาลัย)</label>
+              <textarea rows={2} value={aiCustomPrompt} onChange={(e) => setAiCustomPrompt(e.target.value)} className="ledger-input prose-saraban" placeholder="เช่น ให้ใช้ชื่อเต็มสำนักงานคณะกรรมการการอาชีวศึกษาในเอกสารภายนอก..." />
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">พจนานุกรมคำผิดเพิ่มเติม (บรรทัดละ 1 คู่ รูปแบบ คำผิด=คำถูก)</label>
+                <textarea rows={4} value={misspellingsText} onChange={(e) => setMisspellingsText(e.target.value)} placeholder="วท.ชร.=วิทยาลัยเทคนิคเชียงราย" className="ledger-input font-mono text-xs" />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[#475569]">คำต้องห้ามเพิ่มเติมของหน่วยงาน (บรรทัดละ 1 คำ)</label>
+                <textarea rows={4} value={forbiddenText} onChange={(e) => setForbiddenText(e.target.value)} placeholder="คำที่ไม่ให้ปรากฏในหนังสือราชการ" className="ledger-input text-xs" />
+              </div>
+            </div>
+            <button type="submit" className="rounded-md bg-[#1D4ED8] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1E40AF]">
+              บันทึกการตั้งค่า AI และกฎตรวจคำ
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* TAB 5: Audit Logs & System Diagnostics */}
+      {tab === "audit" && (
+        <div className="space-y-5">
+          {diag && (
+            <section className="ledger-panel overflow-hidden">
+              <div className="ledger-panel-header flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-sm font-bold text-[#0F172A]">สถานะความพร้อมของระบบ</h2>
+                <button type="button" onClick={handleCleanupPreviews} className="tabular-nums-th rounded-md border border-[#CBD5E1] bg-white px-3 py-1.5 text-xs font-semibold text-[#0F172A] hover:bg-slate-50">
+                  ล้างไฟล์พรีวิวชั่วคราว ({diag.preview_file_count} ไฟล์)
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-3 p-4 text-xs sm:grid-cols-4">
+                <div className="rounded-md border border-[#E2E8F0] bg-[#F8FAFC] p-3">
+                  <div className="text-[#475569]">ฐานข้อมูล</div>
+                  <div className="mt-1 font-bold text-[#0F172A]">{diag.db_backend}</div>
+                </div>
+                <div className="rounded-md border border-[#E2E8F0] bg-[#F8FAFC] p-3">
+                  <div className="text-[#475569]">ตัวแปลง PDF (LibreOffice)</div>
+                  <div className={`mt-1 font-bold ${diag.libreoffice_available ? "text-emerald-700" : "text-amber-700"}`}>
+                    {diag.libreoffice_available ? "พร้อมใช้งาน" : "ไม่พบ (ใช้ Word Fallback)"}
+                  </div>
+                </div>
+                <div className="rounded-md border border-[#E2E8F0] bg-[#F8FAFC] p-3">
+                  <div className="text-[#475569]">ตัวแปลงภาพ PNG (pdftoppm)</div>
+                  <div className={`mt-1 font-bold ${diag.pdftoppm_available ? "text-emerald-700" : "text-amber-700"}`}>
+                    {diag.pdftoppm_available ? "พร้อมใช้งาน" : "ไม่พบ (ใช้ iframe Fallback)"}
+                  </div>
+                </div>
+                <div className="rounded-md border border-[#E2E8F0] bg-[#F8FAFC] p-3">
+                  <div className="text-[#475569]">ฟอนต์สารบรรณที่พบ</div>
+                  <div className="mt-1 font-bold text-[#0F172A]">{diag.sarabun_fonts_detected.join(", ") || "ระบบ Windows"}</div>
+                </div>
+              </div>
+            </section>
+          )}
+
+          <section className="ledger-panel overflow-hidden">
+            <div className="ledger-panel-header flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-bold text-[#0F172A]">ประวัติการใช้งานระบบ (Audit Logs)</h2>
+                <span className="text-[11px] text-[#64748B] md:hidden">(เลื่อนตารางซ้าย-ขวาได้)</span>
+              </div>
+              <div className="flex w-full gap-2 sm:w-auto">
+                <input
+                  type="text"
+                  value={logQuery}
+                  onChange={(e) => setLogQuery(e.target.value)}
+                  placeholder="ค้นหาอีเมล หรือเหตุการณ์..."
+                  className="ledger-input flex-1 py-1 text-xs sm:w-56"
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const r = await api.getAuditLogs(logQuery);
+                    setLogs(r.logs);
+                  }}
+                  className="shrink-0 rounded-md bg-[#0F172A] px-3 py-1 text-xs font-semibold text-white hover:bg-[#1E293B]"
+                >
+                  ค้นหา
+                </button>
+              </div>
+            </div>
+            <div className="max-h-96 overflow-x-auto overflow-y-auto">
+              <table className="ledger-table text-xs">
+                <thead>
+                  <tr>
+                    <th>เวลา</th>
+                    <th>ผู้ดำเนินการ</th>
+                    <th>เหตุการณ์</th>
+                    <th>รายละเอียด</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logs.map((l) => (
+                    <tr key={l.id}>
+                      <td className="tabular-nums-th font-mono text-[11px] text-[#475569]">{l.created_at.slice(0, 19).replace("T", " ")}</td>
+                      <td className="text-[#0F172A]">{l.actor_email}</td>
+                      <td className="font-semibold text-[#1E3A8A]">{l.event_type}</td>
+                      <td className="font-mono text-[11px] text-[#475569]">{JSON.stringify(l.metadata)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* TAB 6: Templates Management */}
+      {tab === "templates" && (
+        <AdminTemplatesTab
+          onStatus={(m, e) => {
+            setMsg(m);
+            setErrMsg(e || "");
+          }}
+        />
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,70 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cric-edocx-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cric_edocx}
+      POSTGRES_USER: ${POSTGRES_USER:-cric}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cric_dev_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cric} -d ${POSTGRES_DB:-cric_edocx}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  doc-engine:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cric-edocx-engine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cric}:${POSTGRES_PASSWORD:-cric_dev_password}@postgres:5432/${POSTGRES_DB:-cric_edocx}
+      STORAGE_DIR: /app/storage
+      SSO_ISSUER: ${SSO_ISSUER:-https://sso.cric.ac.th/realms/cric-college}
+      SSO_REALM: ${SSO_REALM:-cric-college}
+      SSO_CLIENT_ID: ${SSO_CLIENT_ID:-cric-edocx}
+      SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:-}
+      SSO_REDIRECT_URI: ${SSO_REDIRECT_URI:-}
+      ALLOWED_EMAIL_DOMAIN: ${ALLOWED_EMAIL_DOMAIN:-cric.ac.th}
+      JWT_SECRET: ${JWT_SECRET:-cric-secure-jwt-secret-key-super-random-32char}
+      PANEL_API_URL: ${PANEL_API_URL:-https://panel.cric.ac.th/api}
+      PANEL_API_TOKEN: ${PANEL_API_TOKEN:-}
+      PANEL_SYNC_SECRET: ${PANEL_SYNC_SECRET:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      AUTH_DEV_MODE: ${AUTH_DEV_MODE:-true}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3030,http://127.0.0.1:3030,http://localhost:3000,http://127.0.0.1:3000}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - backend_storage:/app/storage
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cric-edocx-web
+    restart: unless-stopped
+    depends_on:
+      - doc-engine
+    environment:
+      INTERNAL_API_URL: http://doc-engine:8000
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-same-origin}
+      NEXT_PUBLIC_SSO_URL: https://sso.cric.ac.th
+    ports:
+      - "${WEB_PORT:-3030}:3000"
+
+volumes:
+  pg_data:
+  backend_storage:
