@@ -70,7 +70,28 @@ interface NormalSubjectEntry {
   assessment_suitable: boolean;
   assessment_note: string;
   other_note: string;
+  attitude_ratings: number[];
+  attitude_other_label: string;
 }
+
+const ATTITUDE_CRITERIA = [
+  "1. ความสนใจใฝ่รู้",
+  "2. มนุษยสัมพันธ์",
+  "3. มีวินัย",
+  "4. ความขยัน",
+  "5. ความรับผิดชอบ",
+  "6. ความคิดสร้างสรรค์",
+  "7. ปรัชญาของเศรษฐกิจพอเพียง",
+  "8. อื่นๆ",
+] as const;
+
+const ATTITUDE_LEVELS = [
+  { value: 5, label: "มากที่สุด" },
+  { value: 4, label: "มาก" },
+  { value: 3, label: "ปานกลาง" },
+  { value: 2, label: "น้อย" },
+  { value: 1, label: "ปรับปรุง" },
+] as const;
 
 interface OnlineSessionEntry {
   date_text: string;
@@ -149,6 +170,8 @@ function emptyNormalSubject(): NormalSubjectEntry {
     assessment_suitable: true,
     assessment_note: "",
     other_note: "",
+    attitude_ratings: [0, 0, 0, 0, 0, 0, 0, 0],
+    attitude_other_label: "",
   };
 }
 
@@ -1198,6 +1221,116 @@ export default function TeachingStudioPage() {
                       </div>
                       <input type="text" placeholder="บันทึกการเข้าเรียนรายสัปดาห์" value={sub.weekly_attendance} onChange={(e) => setNormSubjects((p) => p.map((x, i) => (i === idx ? { ...x, weekly_attendance: e.target.value } : x)))} className="ledger-input py-1 text-xs" />
                       <textarea rows={2} placeholder="1.2) ผลการประเมินผู้เรียน" value={sub.evaluation_summary} onChange={(e) => setNormSubjects((p) => p.map((x, i) => (i === idx ? { ...x, evaluation_summary: e.target.value } : x)))} className="ledger-input prose-saraban py-1 text-xs" />
+
+                      {/* 8 × 5 Attitude & Characteristic Evaluation Matrix */}
+                      <div className="space-y-2 rounded border border-[#E2E8F0] bg-white p-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <span className="font-semibold text-[#334155]">เกณฑ์การประเมินผลการเรียนของผู้เรียน (8 ข้อ × 5 ระดับ):</span>
+                          <div className="flex flex-wrap items-center gap-1 text-[11px]">
+                            <span className="text-[#64748B]">เลือกทั้งหมด:</span>
+                            {[
+                              { val: 5, label: "มากที่สุด" },
+                              { val: 4, label: "มาก" },
+                              { val: 3, label: "ปานกลาง" },
+                              { val: 0, label: "ล้างทั้งหมด" },
+                            ].map((preset) => (
+                              <button
+                                key={preset.val}
+                                type="button"
+                                onClick={() =>
+                                  setNormSubjects((p) =>
+                                    p.map((x, i) =>
+                                      i === idx ? { ...x, attitude_ratings: Array(8).fill(preset.val) } : x
+                                    )
+                                  )
+                                }
+                                className={`rounded border px-2 py-0.5 font-medium transition ${
+                                  preset.val === 0
+                                    ? "border-[#CBD5E1] bg-slate-50 text-[#475569] hover:bg-slate-100"
+                                    : "border-[#BFDBFE] bg-[#EFF6FF] text-[#1D4ED8] hover:bg-[#DBEAFE]"
+                                }`}
+                              >
+                                {preset.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                          <table className="w-full min-w-[440px] border-collapse text-[11px] text-[#334155]">
+                            <thead>
+                              <tr className="bg-slate-50">
+                                <th className="border border-[#CBD5E1] px-2 py-1.5 text-left font-semibold">รายการ</th>
+                                {ATTITUDE_LEVELS.map((lvl) => (
+                                  <th key={lvl.value} className="w-16 border border-[#CBD5E1] px-1 py-1.5 text-center font-semibold">
+                                    {lvl.label}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {ATTITUDE_CRITERIA.map((criterion, cIdx) => {
+                                const currentRating = (sub.attitude_ratings ?? [])[cIdx] ?? 0;
+                                return (
+                                  <tr key={criterion} className="hover:bg-slate-50/70">
+                                    <td className="border border-[#CBD5E1] px-2 py-1 font-medium">
+                                      {cIdx === 7 ? (
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="shrink-0">{criterion}</span>
+                                          <input
+                                            type="text"
+                                            placeholder="ระบุ (ถ้ามี)..."
+                                            value={sub.attitude_other_label ?? ""}
+                                            onChange={(e) =>
+                                              setNormSubjects((p) =>
+                                                p.map((x, i) => (i === idx ? { ...x, attitude_other_label: e.target.value } : x))
+                                              )
+                                            }
+                                            className="ledger-input py-0.5 text-[11px]"
+                                          />
+                                        </div>
+                                      ) : (
+                                        criterion
+                                      )}
+                                    </td>
+                                    {ATTITUDE_LEVELS.map((lvl) => {
+                                      const isSelected = currentRating === lvl.value;
+                                      return (
+                                        <td key={lvl.value} className="border border-[#CBD5E1] p-0.5 text-center">
+                                          <button
+                                            type="button"
+                                            aria-label={`${criterion} - ${lvl.label}`}
+                                            aria-pressed={isSelected}
+                                            onClick={() =>
+                                              setNormSubjects((p) =>
+                                                p.map((x, i) => {
+                                                  if (i !== idx) return x;
+                                                  const next = [...(x.attitude_ratings ?? [0, 0, 0, 0, 0, 0, 0, 0])];
+                                                  while (next.length < 8) next.push(0);
+                                                  next[cIdx] = isSelected ? 0 : lvl.value;
+                                                  return { ...x, attitude_ratings: next };
+                                                })
+                                              )
+                                            }
+                                            className={`mx-auto flex h-6 w-6 items-center justify-center rounded border text-xs font-bold transition ${
+                                              isSelected
+                                                ? "border-[#1D4ED8] bg-[#1D4ED8] text-white shadow-sm"
+                                                : "border-[#CBD5E1] bg-white text-transparent hover:border-[#93C5FD] hover:bg-[#EFF6FF]"
+                                            }`}
+                                          >
+                                            ✓
+                                          </button>
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
                       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                         <input type="text" placeholder="2) ปัญหาที่พบ" value={sub.problems} onChange={(e) => setNormSubjects((p) => p.map((x, i) => (i === idx ? { ...x, problems: e.target.value } : x)))} className="ledger-input py-1 text-xs" />
                         <input type="text" placeholder="3) แนวทางแก้ปัญหา" value={sub.solutions} onChange={(e) => setNormSubjects((p) => p.map((x, i) => (i === idx ? { ...x, solutions: e.target.value } : x)))} className="ledger-input py-1 text-xs" />

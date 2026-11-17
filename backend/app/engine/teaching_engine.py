@@ -1294,6 +1294,49 @@ def generate_post_teaching_normal(
                     p.paragraph_format.space_after = Pt(1)
                     _add_mixed_runs(p, txt, font_name=DEFAULT_FONT, size_pt=14.5, bold=is_b)
                 _style_table(sub_tbl, [3.3, 1.0, 0.9, 1.1, 0.9, 1.0], border_color="64748B", header_repeat=False)
+                # Normalize attitude rubric headers and write user-selected ✓ ticks (default 0 = blank)
+                if len(sub_tbl.rows) >= 10:
+                    _set_cell_text(sub_tbl.rows[0].cells[0], "รายการ", font_name=DEFAULT_FONT, size_pt=13.0, bold=True)
+                    sub_tbl.rows[0].cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    _set_cell_text(sub_tbl.rows[0].cells[1], "เกณฑ์การประเมิน", font_name=DEFAULT_FONT, size_pt=13.0, bold=True)
+                    sub_tbl.rows[0].cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    for col_idx, hdr in enumerate(["มากที่สุด", "มาก", "ปานกลาง", "น้อย", "ปรับปรุง"], start=1):
+                        _set_cell_text(sub_tbl.rows[1].cells[col_idx], hdr, font_name=DEFAULT_FONT, size_pt=13.0, bold=True)
+                        sub_tbl.rows[1].cells[col_idx].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+                    raw_ratings = sub.get("attitude_ratings")
+                    ratings: list[int] = []
+                    if isinstance(raw_ratings, list):
+                        for val in raw_ratings[:8]:
+                            try:
+                                iv = int(val)
+                            except (TypeError, ValueError):
+                                iv = 0
+                            ratings.append(iv if 1 <= iv <= 5 else 0)
+                    while len(ratings) < 8:
+                        ratings.append(0)
+
+                    other_label = str(sub.get("attitude_other_label") or "").strip()
+                    sub_tbl.rows[9].cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
+                    _set_cell_text(
+                        sub_tbl.rows[9].cells[0],
+                        f"8. {other_label}" if other_label else "8. อื่นๆ.................................",
+                        font_name=DEFAULT_FONT,
+                        size_pt=13.0,
+                        bold=False,
+                    )
+
+                    for item_idx in range(8):
+                        r_row = sub_tbl.rows[2 + item_idx]
+                        r_val = ratings[item_idx]
+                        target_col = (6 - r_val) if 1 <= r_val <= 5 else None
+                        for col_idx in range(1, 6):
+                            c_tick = r_row.cells[col_idx]
+                            if col_idx == target_col:
+                                _set_cell_text(c_tick, "✓", font_name=CHECKBOX_FONT, size_pt=11.0, bold=True)
+                            else:
+                                _set_cell_text(c_tick, "", font_name=DEFAULT_FONT, size_pt=13.0, bold=False)
+                            c_tick.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
                 for txt, is_b in post_lines:
                     p_after = c0.add_paragraph()
                     p_after.paragraph_format.space_before = Pt(2)

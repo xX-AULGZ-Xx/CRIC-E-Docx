@@ -252,6 +252,50 @@ def test_courses_teaching_4_modes_and_photo_upload():
     d3b = _docx.Document(io.BytesIO(client.get(r3.json()["bundle_files"][1]["file_url"]).content))
     assert abs(d3b.sections[0].page_width.cm - 21.0) < 0.2
     assert "รอปรับเกณฑ์ใบงาน" in "\n".join(c.text for t in d3b.tables for r in t.rows for c in r.cells)
+    sub_tbl_blank = d3b.tables[0].rows[2].cells[0].tables[0]
+    assert sub_tbl_blank.rows[1].cells[5].text.strip() == "ปรับปรุง"
+    for item_i in range(8):
+        for col_i in range(1, 6):
+            assert sub_tbl_blank.rows[2 + item_i].cells[col_i].text.strip() == ""
+
+    # 3b. Post-teaching normal with selected attitude_ratings + custom item 8 label
+    r3_sel = client.post(
+        "/v1/bundles/teaching/render",
+        headers={"X-User-Email": "academic@cric.ac.th"},
+        json={
+            "doc_type": "post_teaching_normal",
+            "convert_pdf": False,
+            "payload": {
+                "doc_number": "ฝว. 13/2569",
+                "department_name": "แผนกวิชาเทคโนโลยีธุรกิจดิจิทัล",
+                "week_start": 1,
+                "week_end": 4,
+                "instructor_name": "ครูทดสอบ",
+                "dept_head_name": "หัวหน้าแผนกทดสอบ",
+                "subjects": [
+                    {
+                        "course_code": "21910-9999",
+                        "course_name": "วิชาระบบอัตโนมัติทดสอบ",
+                        "unit_title": "หน่วยที่ 1",
+                        "student_group": "692191001",
+                        "total_students": 10,
+                        "passed_students": 10,
+                        "attitude_ratings": [5, 4, 3, 2, 1, 0, 4, 5],
+                        "attitude_other_label": "การแต่งกายเรียบร้อย",
+                    }
+                ],
+            },
+        },
+    )
+    assert r3_sel.status_code == 200
+    d3b_sel = _docx.Document(io.BytesIO(client.get(r3_sel.json()["bundle_files"][1]["file_url"]).content))
+    sub_tbl_sel = d3b_sel.tables[0].rows[2].cells[0].tables[0]
+    assert "8. การแต่งกายเรียบร้อย" in sub_tbl_sel.rows[9].cells[0].text
+    expected_cols = [1, 2, 3, 4, 5, None, 2, 1]
+    for item_i, exp_col in enumerate(expected_cols):
+        for col_i in range(1, 6):
+            cell_txt = sub_tbl_sel.rows[2 + item_i].cells[col_i].text.strip()
+            assert cell_txt == ("✓" if col_i == exp_col else "")
 
     # 4. Upload PNG photo and render Online Teaching Report (framed tables + 2-col photo grid)
     png_1x1 = (
