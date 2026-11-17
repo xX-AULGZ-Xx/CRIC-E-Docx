@@ -65,6 +65,17 @@ def _run_teaching_generator(doc_type: str, payload: dict[str, Any], prefix: str,
     raise HTTPException(status_code=400, detail=f"ไม่รองรับประเภทเอกสารการสอน: {doc_type}")
 
 
+def _attach_instructor_signature(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    out = dict(payload)
+    if out.get("include_instructor_signature", True):
+        sig_path = str(user.get("signature_storage_path") or "").strip()
+        if sig_path and Path(sig_path).exists():
+            sigs = dict(out.get("signatures") or {})
+            sigs.setdefault("instructor", sig_path)
+            out["signatures"] = sigs
+    return out
+
+
 def _save_bundle_document(
     user: dict[str, Any],
     doc_id: str | None,
@@ -83,6 +94,8 @@ def _save_bundle_document(
         "bundle_files": bundle_files,
         "zip_url": render_res.get("zip_url", ""),
         "zip_filename": render_res.get("zip_filename", ""),
+        "merged_pdf_url": render_res.get("merged_pdf_url", ""),
+        "merged_pdf_filename": render_res.get("merged_pdf_filename", ""),
     }
     actor_tag = str(user.get("email") or user.get("username") or user.get("id") or "user")
     doc = db.save_document(
@@ -94,12 +107,12 @@ def _save_bundle_document(
             "is_circular": False,
             "speed_level": "",
             "secrecy_level": "",
-            "font_family": "TH SarabunPSK",
+            "font_family": "TH Sarabun New",
             "subject": subject,
             "payload_json": stored_payload,
             "status": "draft",
             "docx_path": first.get("file_url") or render_res.get("zip_url") or "",
-            "pdf_path": first.get("pdf_url") or "",
+            "pdf_path": render_res.get("merged_pdf_url") or first.get("pdf_url") or "",
             "created_by": actor_tag,
         }
     )
@@ -129,11 +142,12 @@ def save_sp_bundle(req: BundleSaveRequest, x_user_email: str | None = Header(def
 
 @router.post("/teaching/render")
 def render_teaching_bundle(req: BundleRenderRequest, x_user_email: str | None = Header(default=None)):
-    resolve_current_user(x_user_email)
+    user = resolve_current_user(x_user_email)
     org_profile = get_effective_org_profile()
     doc_type = req.doc_type or str(req.payload.get("type") or "course_syllabus")
     prefix = _safe_prefix(req.preview_key, uuid.uuid4().hex[:8])
-    return _run_teaching_generator(doc_type, req.payload, prefix, org_profile, convert_pdf=req.convert_pdf)
+    enriched = _attach_instructor_signature(req.payload, user)
+    return _run_teaching_generator(doc_type, enriched, prefix, org_profile, convert_pdf=req.convert_pdf)
 
 
 @router.post("/teaching/save")
@@ -142,7 +156,8 @@ def save_teaching_bundle(req: BundleSaveRequest, x_user_email: str | None = Head
     doc_id = req.id or str(uuid.uuid4())
     org_profile = get_effective_org_profile()
     doc_type = req.doc_type or str(req.payload.get("type") or "course_syllabus")
-    render_res = _run_teaching_generator(doc_type, req.payload, f"doc_{doc_id}", org_profile, convert_pdf=req.convert_pdf)
+    enriched = _attach_instructor_signature(req.payload, user)
+    render_res = _run_teaching_generator(doc_type, enriched, f"doc_{doc_id}", org_profile, convert_pdf=req.convert_pdf)
     default_titles = {
         "course_syllabus": f"กำหนดการสอน {req.payload.get('course_code', '')} {req.payload.get('course_name', '')}".strip(),
         "lesson_plan": f"แผนการจัดการเรียนรู้ {req.payload.get('course_code', '')} {req.payload.get('course_name', '')}".strip(),
@@ -150,7 +165,7 @@ def save_teaching_bundle(req: BundleSaveRequest, x_user_email: str | None = Head
         "post_teaching_online": f"รายงานการสอนออนไลน์ สัปดาห์ที่ {req.payload.get('week_number', 1)}",
     }
     subject = req.subject or default_titles.get(doc_type, "เอกสารงานสอน")
-    doc = _save_bundle_document(user, doc_id, doc_type, subject, req.division_code, req.payload, render_res)
+    doc = _save_bundle_document(user, doc_id, doc_type, subject, req.division_code, enriched, render_res)
     return {"document": doc, "render": render_res}
 
 
@@ -179,8 +194,10 @@ def submit_bundle_workflow(doc_id: str, body: BundleSubmitRequest, x_user_email:
         raise HTTPException(status_code=404, detail="ไม่พบเอกสารชุดที่ระบุ")
     steps: list[dict[str, str]] = []
     if body.reviewer_email:
-        steps.append({"assignee_email": body.reviewer_email, "assignee_role": "deputy_director"})
-    steps.append({"assignee_email": body.approver_email, "assignee_role": "director"})
+        reviewer = db.get_user_by_email(body.reviewer_email)
+        steps.append({"assignee_email": body.reviewer_email, "assignee_role": (reviewer or {}).get("role", "deputy_director")})
+    approver = db.get_user_by_email(body.approver_email)
+    steps.append({"assignee_email": body.approver_email, "assignee_role": (approver or {}).get("role", "director")})
     db.replace_approval_steps(doc_id, steps)
     new_status = "pending_review" if body.reviewer_email else "pending_approval"
     db.save_document({**doc, "status": new_status})

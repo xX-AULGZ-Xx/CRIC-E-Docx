@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import copy
+import re
+import subprocess
 import zipfile
 from pathlib import Path
 from typing import Any
 
 import docx
+from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
+from docx.oxml import OxmlElement, parse_xml
+from docx.oxml.ns import nsdecls, qn
 from docx.shared import Cm, Pt
 
 from app.config import ATTACHMENTS_DIR, TEMPLATES_DIR
@@ -19,33 +22,237 @@ from app.engine.template_resolver import resolve_system_template
 from app.engine.thai_utils import current_buddhist_year, format_thai_date, to_thai_digits
 
 TEACH_TEMPLATES_DIR = TEMPLATES_DIR / "teaching"
+DEFAULT_FONT = "TH Sarabun New"
+CHECKBOX_FONT = "DejaVu Sans"
+_THAI_TOKEN_RE = re.compile(r"([☑☐✓])")
 
 
-def _set_para_text(para: Any, text: str, font_name: str | None = None, font_size_pt: float | None = None) -> None:
+def _apply_run_font(run: Any, font_name: str = DEFAULT_FONT, size_pt: float | None = 16.0, bold: bool | None = None) -> None:
+    if bold is not None:
+        run.bold = bold
+    if font_name:
+        run.font.name = font_name
+    if size_pt:
+        run.font.size = Pt(size_pt)
+    rpr = run._element.get_or_add_rPr()
+    rfonts = rpr.find(qn("w:rFonts"))
+    if rfonts is None:
+        rfonts = OxmlElement("w:rFonts")
+        rpr.insert(0, rfonts)
+    for attr in ("w:ascii", "w:hAnsi", "w:cs", "w:eastAsia"):
+        rfonts.set(qn(attr), font_name)
+    rfonts.set(qn("w:hint"), "cs")
+
+
+def _set_a4_section(
+    doc: docx.Document,
+    top_cm: float = 1.5,
+    bottom_cm: float = 1.5,
+    left_cm: float = 2.0,
+    right_cm: float = 1.5,
+) -> None:
+    """Normalize every teaching document to standard A4 (21.0 x 29.7 cm) with safe printable margins."""
+    for sec in doc.sections:
+        sec.page_width = Cm(21.0)
+        sec.page_height = Cm(29.7)
+        sec.top_margin = Cm(top_cm)
+        sec.bottom_margin = Cm(bottom_cm)
+        sec.left_margin = Cm(left_cm)
+        sec.right_margin = Cm(right_cm)
+
+
+def _set_para_text(
+    para: Any,
+    text: str,
+    font_name: str | None = None,
+    font_size_pt: float | None = None,
+    bold: bool | None = None,
+) -> None:
     if not para.runs:
         r = para.add_run(text)
-        if font_name:
-            r.font.name = font_name
-        if font_size_pt:
-            r.font.size = Pt(font_size_pt)
+        _apply_run_font(r, font_name or DEFAULT_FONT, font_size_pt, bold=bold)
         return
     r0 = para.runs[0]
     r0.text = text
-    if font_name:
-        r0.font.name = font_name
-    if font_size_pt:
-        r0.font.size = Pt(font_size_pt)
+    if font_name or font_size_pt or bold is not None:
+        _apply_run_font(r0, font_name or r0.font.name or DEFAULT_FONT, font_size_pt, bold=bold)
     for r in para.runs[1:]:
         r.text = ""
 
 
-def _set_cell_text(cell: Any, text: str) -> None:
+def _add_mixed_runs(
+    para: Any,
+    text: str,
+    font_name: str = DEFAULT_FONT,
+    size_pt: float = 15.0,
+    bold: bool = False,
+) -> None:
+    """Render checkbox symbols (☑/☐/✓) in DejaVu Sans so Word and Linux LibreOffice never render missing glyphs."""
+    parts = _THAI_TOKEN_RE.split(str(text))
+    for part in parts:
+        if not part:
+            continue
+        r = para.add_run(part)
+        if part in ("☑", "☐", "✓"):
+            _apply_run_font(r, CHECKBOX_FONT, max(11.0, size_pt - 2.0), bold=False)
+        else:
+            _apply_run_font(r, font_name, size_pt, bold=bold)
+
+
+def _set_cell_lines(
+    cell: Any,
+    lines: list[tuple[str, bool]],
+    font_name: str = DEFAULT_FONT,
+    size_pt: float = 14.5,
+    align: WD_ALIGN_PARAGRAPH | None = None,
+) -> None:
+    for p in list(cell.paragraphs)[1:]:
+        _remove_para(p)
+    p0 = cell.paragraphs[0]
+    p0.text = ""
+    for idx, (txt, is_bold) in enumerate(lines):
+        p = p0 if idx == 0 else cell.add_paragraph()
+        p.paragraph_format.space_before = Pt(1)
+        p.paragraph_format.space_after = Pt(1)
+        if align is not None:
+            p.alignment = align
+        _add_mixed_runs(p, txt, font_name=font_name, size_pt=size_pt, bold=is_bold)
+
+
+def _set_cell_text(
+    cell: Any,
+    text: str,
+    font_name: str | None = None,
+    size_pt: float | None = None,
+    bold: bool | None = None,
+) -> None:
     if not cell.paragraphs:
         cell.text = text
         return
-    _set_para_text(cell.paragraphs[0], text)
-    for p in cell.paragraphs[1:]:
-        _set_para_text(p, "")
+    lines = str(text).split("\n")
+    _set_para_text(cell.paragraphs[0], lines[0], font_name=font_name, font_size_pt=size_pt, bold=bold)
+    for p in list(cell.paragraphs)[1:]:
+        _remove_para(p)
+    for extra in lines[1:]:
+        p = cell.add_paragraph()
+        p.paragraph_format.space_before = Pt(1)
+        p.paragraph_format.space_after = Pt(1)
+        _add_mixed_runs(p, extra, font_name=font_name or DEFAULT_FONT, size_pt=size_pt or 14.5, bold=bool(bold))
+
+
+def _set_row_cant_split(row: Any) -> None:
+    tr_pr = row._tr.get_or_add_trPr()
+    if tr_pr.find(qn("w:cantSplit")) is None:
+        tr_pr.append(OxmlElement("w:cantSplit"))
+
+
+def _set_row_header(row: Any) -> None:
+    tr_pr = row._tr.get_or_add_trPr()
+    if tr_pr.find(qn("w:tblHeader")) is None:
+        tr_pr.append(OxmlElement("w:tblHeader"))
+
+
+def _shade_cell(cell: Any, hex_color: str) -> None:
+    tc_pr = cell._tc.get_or_add_tcPr()
+    for old in tc_pr.findall(qn("w:shd")):
+        tc_pr.remove(old)
+    tc_pr.append(parse_xml(f'<w:shd {nsdecls("w")} w:fill="{hex_color}"/>'))
+
+
+def _set_cell_margins(cell: Any, top_dxa: int = 80, bottom_dxa: int = 80, left_dxa: int = 120, right_dxa: int = 120) -> None:
+    tc_pr = cell._tc.get_or_add_tcPr()
+    for old in tc_pr.findall(qn("w:tcMar")):
+        tc_pr.remove(old)
+    tc_mar = parse_xml(
+        f'<w:tcMar {nsdecls("w")}>'
+        f'<w:top w:w="{top_dxa}" w:type="dxa"/>'
+        f'<w:left w:w="{left_dxa}" w:type="dxa"/>'
+        f'<w:bottom w:w="{bottom_dxa}" w:type="dxa"/>'
+        f'<w:right w:w="{right_dxa}" w:type="dxa"/>'
+        f"</w:tcMar>"
+    )
+    tc_pr.append(tc_mar)
+
+
+def _style_table(
+    table: Any,
+    col_widths_cm: list[float] | None = None,
+    border_color: str = "64748B",
+    header_repeat: bool = True,
+) -> None:
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False
+    tbl_pr = table._tbl.tblPr
+    if tbl_pr is not None:
+        for old in tbl_pr.findall(qn("w:tblBorders")):
+            tbl_pr.remove(old)
+        borders = parse_xml(
+            f'<w:tblBorders {nsdecls("w")}>'
+            f'<w:top w:val="single" w:sz="4" w:space="0" w:color="{border_color}"/>'
+            f'<w:left w:val="single" w:sz="4" w:space="0" w:color="{border_color}"/>'
+            f'<w:bottom w:val="single" w:sz="4" w:space="0" w:color="{border_color}"/>'
+            f'<w:right w:val="single" w:sz="4" w:space="0" w:color="{border_color}"/>'
+            f'<w:insideH w:val="single" w:sz="4" w:space="0" w:color="{border_color}"/>'
+            f'<w:insideV w:val="single" w:sz="4" w:space="0" w:color="{border_color}"/>'
+            f"</w:tblBorders>"
+        )
+        tbl_pr.append(borders)
+        if col_widths_cm:
+            total_dxa = int(sum(col_widths_cm) * 567)
+            for tag_name in ("w:tblW", "w:tblLayout"):
+                for old in tbl_pr.findall(qn(tag_name)):
+                    tbl_pr.remove(old)
+            tbl_pr.append(parse_xml(f'<w:tblW {nsdecls("w")} w:w="{total_dxa}" w:type="dxa"/>'))
+            tbl_pr.append(parse_xml(f'<w:tblLayout {nsdecls("w")} w:type="fixed"/>'))
+    if col_widths_cm:
+        old_grid = table._tbl.find(qn("w:tblGrid"))
+        if old_grid is not None:
+            table._tbl.remove(old_grid)
+        new_grid = OxmlElement("w:tblGrid")
+        for w_cm in col_widths_cm:
+            gc = OxmlElement("w:gridCol")
+            gc.set(qn("w:w"), str(int(w_cm * 567)))
+            new_grid.append(gc)
+        table._tbl.insert(1, new_grid)
+    for ri, row in enumerate(table.rows):
+        _set_row_cant_split(row)
+        if header_repeat and ri == 0:
+            _set_row_header(row)
+        if col_widths_cm:
+            seen_tcs: set[int] = set()
+            for ci, cell in enumerate(row.cells):
+                tc_id = id(cell._tc)
+                if tc_id in seen_tcs or ci >= len(col_widths_cm):
+                    continue
+                seen_tcs.add(tc_id)
+                span_w_cm = sum(
+                    col_widths_cm[j]
+                    for j in range(ci, len(col_widths_cm))
+                    if j < len(row.cells) and row.cells[j]._tc is cell._tc
+                )
+                cell.width = Cm(span_w_cm)
+                tc_pr = cell._tc.get_or_add_tcPr()
+                for old_w in tc_pr.findall(qn("w:tcW")):
+                    tc_pr.remove(old_w)
+                tc_pr.append(parse_xml(f'<w:tcW {nsdecls("w")} w:w="{int(span_w_cm * 567)}" w:type="dxa"/>'))
+
+
+def _clear_table_borders(table: Any) -> None:
+    tbl_pr = table._tbl.tblPr
+    if tbl_pr is not None:
+        for old in tbl_pr.findall(qn("w:tblBorders")):
+            tbl_pr.remove(old)
+        borders = parse_xml(
+            f'<w:tblBorders {nsdecls("w")}>'
+            f'<w:top w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+            f'<w:left w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+            f'<w:bottom w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+            f'<w:right w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+            f'<w:insideH w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+            f'<w:insideV w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+            f"</w:tblBorders>"
+        )
+        tbl_pr.append(borders)
 
 
 def _sync_table_rows(table: Any, target_data_rows: int, header_rows: int = 1) -> None:
@@ -55,7 +262,6 @@ def _sync_table_rows(table: Any, target_data_rows: int, header_rows: int = 1) ->
         tr.getparent().remove(tr)
     if target_data_rows <= 0:
         return
-    # Ensure at least one template data row exists to clone
     while len(table.rows) - header_rows < target_data_rows:
         base_tr = table.rows[-1]._tr
         new_tr = copy.deepcopy(base_tr)
@@ -69,20 +275,255 @@ def _remove_para(para: Any) -> None:
         parent.remove(el)
 
 
-def _insert_para_before(anchor_para: Any, text: str, bold: bool = False, font_name: str = "TH SarabunPSK", size_pt: float = 16.0, left_indent_cm: float = 0.0) -> Any:
+def _insert_para_before(
+    anchor_para: Any,
+    text: str,
+    bold: bool = False,
+    font_name: str = DEFAULT_FONT,
+    size_pt: float = 16.0,
+    left_indent_cm: float = 0.0,
+) -> Any:
     new_p = docx.text.paragraph.Paragraph(OxmlElement("w:p"), anchor_para._parent)
     anchor_para._element.addprevious(new_p._element)
     if left_indent_cm:
         new_p.paragraph_format.left_indent = Cm(left_indent_cm)
     r = new_p.add_run(text)
-    r.bold = bold
-    r.font.name = font_name
-    r.font.size = Pt(size_pt)
+    _apply_run_font(r, font_name, size_pt, bold=bold)
     return new_p
 
 
-def _finalize_bundle(generated_paths: list[Path], out_dir: Path, prefix: str, labels: list[tuple[str, str]], zip_label: str, convert_pdf: bool) -> dict[str, Any]:
+def _resolve_sig_path(raw: Any) -> Path | None:
+    if not raw:
+        return None
+    p = Path(str(raw))
+    return p if p.exists() and p.is_file() else None
+
+
+def _populate_signer_cell(
+    cell: Any,
+    name: str,
+    title_lines: list[str],
+    sig_path: Path | None = None,
+    role_suffix: str = "",
+    font_name: str = "TH SarabunIT๙",
+    size_pt: float = 15.0,
+) -> None:
+    """Fill a signature cell with an embedded PNG (if available) or dotted signature line + name + title."""
+    for p in list(cell.paragraphs)[1:]:
+        _remove_para(p)
+    p0 = cell.paragraphs[0]
+    p0.text = ""
+    p0.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p0.paragraph_format.space_before = Pt(2)
+    p0.paragraph_format.space_after = Pt(1)
+    if sig_path is not None:
+        try:
+            r_img = p0.add_run()
+            r_img.add_picture(str(sig_path), height=Cm(1.05))
+            if role_suffix:
+                r_sfx = p0.add_run(f" {role_suffix}")
+                _apply_run_font(r_sfx, font_name, size_pt)
+        except Exception:
+            r_dot = p0.add_run(f"ลงชื่อ..........................................{role_suffix}")
+            _apply_run_font(r_dot, font_name, size_pt)
+    else:
+        r_dot = p0.add_run(f"ลงชื่อ..........................................{role_suffix}")
+        _apply_run_font(r_dot, font_name, size_pt)
+
+    p_name = cell.add_paragraph()
+    p_name.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_name.paragraph_format.space_before = Pt(0)
+    p_name.paragraph_format.space_after = Pt(0)
+    _apply_run_font(p_name.add_run(f"({name})"), font_name, size_pt)
+
+    for tl in title_lines:
+        if not tl:
+            continue
+        p_t = cell.add_paragraph()
+        p_t.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_t.paragraph_format.space_before = Pt(0)
+        p_t.paragraph_format.space_after = Pt(0)
+        _apply_run_font(p_t.add_run(tl), font_name, size_pt)
+
+
+def _apply_cover_signatures(
+    doc: docx.Document,
+    payload: dict[str, Any],
+    org_profile: dict[str, Any],
+    department: str,
+    division: str,
+    instructor: str,
+    position: str,
+) -> None:
+    sigs = payload.get("signatures") if isinstance(payload.get("signatures"), dict) else {}
+    dir_name = (org_profile.get("director") or {}).get("name") or "............................................................"
+    dir_title = (org_profile.get("director") or {}).get("title") or "ผู้อำนวยการวิทยาลัยการอาชีพเชียงราย"
+
+    # P16..P18: Director block
+    ps = doc.paragraphs
+    if len(ps) > 18:
+        dir_sig = _resolve_sig_path(sigs.get("director"))
+        ps[16].text = ""
+        ps[16].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        if dir_sig is not None:
+            try:
+                ps[16].add_run().add_picture(str(dir_sig), height=Cm(1.05))
+            except Exception:
+                _apply_run_font(ps[16].add_run("ลงชื่อ........................................................."), "TH SarabunIT๙", 16.0)
+        else:
+            _apply_run_font(ps[16].add_run("ลงชื่อ........................................................."), "TH SarabunIT๙", 16.0)
+        _set_para_text(ps[17], f"({dir_name})", font_name="TH SarabunIT๙", font_size_pt=16.0)
+        _set_para_text(ps[18], dir_title, font_name="TH SarabunIT๙", font_size_pt=16.0)
+
+    # T3: Replace merged 3-col template signature grid cleanly with a balanced 2x2 borderless table
+    if len(doc.tables) > 3:
+        old_t3 = doc.tables[3]
+        dept_head = payload.get("dept_head_name") or ".........................................................."
+        curr_head = payload.get("curriculum_head_name") or ".........................................................."
+        deputy_acad = payload.get("deputy_academic_name") or ".........................................................."
+
+        new_tbl = doc.add_table(rows=2, cols=2)
+        _clear_table_borders(new_tbl)
+        new_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+        for row in new_tbl.rows:
+            _set_row_cant_split(row)
+            for c in row.cells:
+                c.width = Cm(8.0)
+                _set_cell_margins(c, 50, 50, 40, 40)
+
+        _populate_signer_cell(
+            new_tbl.rows[0].cells[0],
+            instructor,
+            [f"ตำแหน่ง {position}"],
+            sig_path=_resolve_sig_path(sigs.get("instructor")),
+            role_suffix="ผู้รายงาน",
+            size_pt=14.5,
+        )
+        _populate_signer_cell(
+            new_tbl.rows[0].cells[1],
+            dept_head,
+            [f"หัวหน้า{department}"],
+            sig_path=_resolve_sig_path(sigs.get("dept_head")),
+            size_pt=14.5,
+        )
+        _populate_signer_cell(
+            new_tbl.rows[1].cells[0],
+            curr_head,
+            ["หัวหน้างานพัฒนาหลักสูตรการเรียนการสอน"],
+            sig_path=_resolve_sig_path(sigs.get("curriculum_head")),
+            size_pt=14.5,
+        )
+        _populate_signer_cell(
+            new_tbl.rows[1].cells[1],
+            deputy_acad,
+            [f"รองผู้อำนวยการ{division}"],
+            sig_path=_resolve_sig_path(sigs.get("deputy_academic")),
+            size_pt=14.5,
+        )
+        old_t3._element.addprevious(new_tbl._element)
+        parent = old_t3._element.getparent()
+        if parent is not None:
+            parent.remove(old_t3._element)
+
+
+def _append_lesson_approval_block(doc: docx.Document, payload: dict[str, Any], org_profile: dict[str, Any]) -> None:
+    sigs = payload.get("signatures") if isinstance(payload.get("signatures"), dict) else {}
+    instructor = payload.get("instructor_name") or "ครูผู้สอน"
+    position = payload.get("instructor_title") or "ครู"
+    department = payload.get("department_name") or "แผนกวิชา"
+    division = payload.get("division_name") or "ฝ่ายวิชาการ"
+    dept_head = payload.get("dept_head_name") or ".........................................................."
+    curr_head = payload.get("curriculum_head_name") or ".........................................................."
+    deputy_acad = payload.get("deputy_academic_name") or ".........................................................."
+    dir_name = (org_profile.get("director") or {}).get("name") or ".........................................................."
+    dir_title = (org_profile.get("director") or {}).get("title") or "ผู้อำนวยการวิทยาลัยการอาชีพเชียงราย"
+
+    p_hdr = doc.add_paragraph()
+    p_hdr.paragraph_format.space_before = Pt(14)
+    p_hdr.paragraph_format.space_after = Pt(6)
+    p_hdr.paragraph_format.keep_with_next = True
+    _apply_run_font(p_hdr.add_run("การตรวจสอบและอนุมัติแผนการจัดการเรียนรู้"), DEFAULT_FONT, 16.0, bold=True)
+
+    tbl = doc.add_table(rows=3, cols=2)
+    _clear_table_borders(tbl)
+    tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for row in tbl.rows:
+        _set_row_cant_split(row)
+        for cell in row.cells:
+            cell.width = Cm(8.6)
+            _set_cell_margins(cell, top_dxa=90, bottom_dxa=90, left_dxa=80, right_dxa=80)
+
+    _populate_signer_cell(
+        tbl.rows[0].cells[0],
+        instructor,
+        [f"ตำแหน่ง {position} ({department})", "ผู้จัดทำแผนการจัดการเรียนรู้"],
+        sig_path=_resolve_sig_path(sigs.get("instructor")),
+        font_name=DEFAULT_FONT,
+        size_pt=15.0,
+    )
+    _populate_signer_cell(
+        tbl.rows[0].cells[1],
+        dept_head,
+        [f"หัวหน้า{department}", "ผู้ตรวจระดับแผนกวิชา"],
+        sig_path=_resolve_sig_path(sigs.get("dept_head")),
+        font_name=DEFAULT_FONT,
+        size_pt=15.0,
+    )
+    _populate_signer_cell(
+        tbl.rows[1].cells[0],
+        curr_head,
+        ["หัวหน้างานพัฒนาหลักสูตรการเรียนการสอน"],
+        sig_path=_resolve_sig_path(sigs.get("curriculum_head")),
+        font_name=DEFAULT_FONT,
+        size_pt=15.0,
+    )
+    _populate_signer_cell(
+        tbl.rows[1].cells[1],
+        deputy_acad,
+        [f"รองผู้อำนวยการ{division}"],
+        sig_path=_resolve_sig_path(sigs.get("deputy_academic")),
+        font_name=DEFAULT_FONT,
+        size_pt=15.0,
+    )
+
+    # Merge bottom row for Director
+    dir_cell = tbl.rows[2].cells[0].merge(tbl.rows[2].cells[1])
+    _populate_signer_cell(
+        dir_cell,
+        dir_name,
+        [dir_title, "ผู้อนุมัติ"],
+        sig_path=_resolve_sig_path(sigs.get("director")),
+        font_name=DEFAULT_FONT,
+        size_pt=15.0,
+    )
+
+
+def _merge_pdfs_poppler(pdf_paths: list[Path], out_dir: Path, out_filename: str) -> Path | None:
+    if len(pdf_paths) < 2:
+        return None
+    out_path = out_dir / out_filename
+    try:
+        subprocess.run(
+            ["pdfunite", *[str(p) for p in pdf_paths], str(out_path)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        return out_path if out_path.exists() else None
+    except Exception:
+        return None
+
+
+def _finalize_bundle(
+    generated_paths: list[Path],
+    out_dir: Path,
+    prefix: str,
+    labels: list[tuple[str, str]],
+    zip_label: str,
+    convert_pdf: bool,
+) -> dict[str, Any]:
     bundle_files: list[dict[str, Any]] = []
+    converted_pdfs: list[Path] = []
     for (key, label), fpath in zip(labels, generated_paths):
         pdf_url = ""
         page_urls: list[str] = []
@@ -90,6 +531,7 @@ def _finalize_bundle(generated_paths: list[Path], out_dir: Path, prefix: str, la
         if convert_pdf:
             try:
                 pdf_path = convert_office_to_pdf(fpath, out_dir)
+                converted_pdfs.append(pdf_path)
                 pdf_url = f"/v1/files/rendered/{pdf_path.name}"
                 pngs = render_pdf_pages_to_png(pdf_path, out_dir, prefix=fpath.stem)
                 page_urls = [f"/v1/files/rendered/{p.name}" for p in pngs]
@@ -108,24 +550,44 @@ def _finalize_bundle(generated_paths: list[Path], out_dir: Path, prefix: str, la
             }
         )
 
+    merged_pdf_url = ""
+    merged_pdf_filename = ""
+    if convert_pdf and len(converted_pdfs) >= 2:
+        merged_name = f"{prefix}_{zip_label}_รวมชุด.pdf"
+        merged_path = _merge_pdfs_poppler(converted_pdfs, out_dir, merged_name)
+        if merged_path is not None:
+            merged_pdf_filename = merged_path.name
+            merged_pdf_url = f"/v1/files/rendered/{merged_path.name}"
+
     zip_name = f"{prefix}_{zip_label}.zip"
     zip_path = out_dir / zip_name
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for p in generated_paths:
             zf.write(p, arcname=p.name)
+        if merged_pdf_filename:
+            zf.write(out_dir / merged_pdf_filename, arcname=merged_pdf_filename)
 
     primary = bundle_files[0] if bundle_files else {}
     return {
         "bundle_files": bundle_files,
         "zip_filename": zip_name,
         "zip_url": f"/v1/files/rendered/{zip_name}",
+        "merged_pdf_filename": merged_pdf_filename,
+        "merged_pdf_url": merged_pdf_url,
         "docx_url": primary.get("file_url", ""),
         "pdf_url": primary.get("pdf_url", ""),
         "page_image_urls": primary.get("page_image_urls", []),
     }
 
 
-def _rewrite_list_section(doc: docx.Document, start_heading: str, end_heading: str, items: list[str], numbered: bool = True) -> None:
+def _rewrite_list_section(
+    doc: docx.Document,
+    start_heading: str,
+    end_heading: str,
+    items: list[str],
+    numbered: bool = True,
+    font_name: str = DEFAULT_FONT,
+) -> None:
     """Replace paragraphs between start_heading and end_heading with provided lines."""
     ps = doc.paragraphs
     start_idx = next((i for i, p in enumerate(ps) if start_heading in p.text), None)
@@ -137,8 +599,29 @@ def _rewrite_list_section(doc: docx.Document, start_heading: str, end_heading: s
         _remove_para(p)
     lines = [str(x).strip() for x in items if str(x).strip()] or ["-"]
     for idx, line in enumerate(lines, start=1):
-        txt = f"{idx}.  {line}" if numbered and not line[:2].isdigit() else line
-        _insert_para_before(anchor, txt)
+        already_numbered = bool(re.match(r"^\s*\d+[\.\)]\s*", line))
+        txt = f"{idx}.  {line}" if numbered and not already_numbered else line
+        _insert_para_before(anchor, txt, font_name=font_name, size_pt=16.0)
+
+
+def _ensure_heading_before_table(table: Any, heading: str) -> None:
+    """Insert a crisp bold heading paragraph before a table so adjacent tables never visually fuse."""
+    p_el = OxmlElement("w:p")
+    table._element.addprevious(p_el)
+    new_p = docx.text.paragraph.Paragraph(p_el, table._parent)
+    new_p.paragraph_format.space_before = Pt(10)
+    new_p.paragraph_format.space_after = Pt(4)
+    new_p.paragraph_format.keep_with_next = True
+    _apply_run_font(new_p.add_run(heading), DEFAULT_FONT, 16.0, bold=True)
+
+
+def _plist(payload: dict[str, Any], key: str) -> list[Any]:
+    """Read a list field supporting both canonical and *_json DB column keys."""
+    val = payload.get(key)
+    if val:
+        return list(val)
+    val_json = payload.get(f"{key}_json")
+    return list(val_json) if val_json else []
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +636,7 @@ def generate_course_syllabus(
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     doc = docx.Document(resolve_system_template("teaching/1_course_syllabus.docx"))
+    _set_a4_section(doc, top_cm=1.5, bottom_cm=1.5, left_cm=1.5, right_cm=1.5)
 
     code = payload.get("course_code") or "-"
     name = payload.get("course_name") or "-"
@@ -168,40 +652,55 @@ def generate_course_syllabus(
     ref = payload.get("reference_text") or "Internet หัวข้อที่เกี่ยวข้อง"
 
     ps = doc.paragraphs
-    _set_para_text(ps[2], "กำหนดการสอน (Course Syllabus)")
-    _set_para_text(ps[3], f"รหัสวิชา : {code}\t\t\tชื่อวิชา : {name}")
-    _set_para_text(ps[4], f"จำนวน : {total_credits}\t\t\tหลักสูตรการศึกษา (Course status) : {level}")
-    _set_para_text(ps[5], f"ความรู้พื้นฐาน (Pre-requisite) : {prereq}")
-    _set_para_text(ps[6], f"ภาคเรียนที่ (Semester) : {semester}\t\tวัน-เวลาที่เรียน : {schedule}")
-    _set_para_text(ps[7], f"ชื่อผู้สอน (Instructor) : {instructor}\t\tโทรศัพท์ (Phone) : {phone}")
-    _set_para_text(ps[8], f"อีเมล์ (E-Mail) : {email}")
-    _set_para_text(ps[9], f"แหล่งค้นคว้าเพิ่มเติม (Reference) : {ref}")
+    _set_para_text(ps[2], "กำหนดการสอน (Course Syllabus)", font_name=DEFAULT_FONT, font_size_pt=18.0, bold=True)
+    _set_para_text(ps[3], f"รหัสวิชา : {code}\t\t\tชื่อวิชา : {name}", font_name=DEFAULT_FONT, font_size_pt=16.0)
+    _set_para_text(ps[4], f"จำนวน : {total_credits}\t\t\tหลักสูตรการศึกษา (Course status) : {level}", font_name=DEFAULT_FONT, font_size_pt=16.0)
+    _set_para_text(ps[5], f"ความรู้พื้นฐาน (Pre-requisite) : {prereq}", font_name=DEFAULT_FONT, font_size_pt=16.0)
+    _set_para_text(ps[6], f"ภาคเรียนที่ (Semester) : {semester}\t\tวัน-เวลาที่เรียน : {schedule}", font_name=DEFAULT_FONT, font_size_pt=16.0)
+    _set_para_text(ps[7], f"ชื่อผู้สอน (Instructor) : {instructor}\t\tโทรศัพท์ (Phone) : {phone}", font_name=DEFAULT_FONT, font_size_pt=16.0)
+    _set_para_text(ps[8], f"อีเมล์ (E-Mail) : {email}", font_name=DEFAULT_FONT, font_size_pt=16.0)
+    _set_para_text(ps[9], f"แหล่งค้นคว้าเพิ่มเติม (Reference) : {ref}", font_name=DEFAULT_FONT, font_size_pt=16.0)
 
-    _rewrite_list_section(doc, "จุดประสงค์รายวิชา", "มาตรฐานรายวิชา", payload.get("objectives") or [])
-    _rewrite_list_section(doc, "มาตรฐานรายวิชา", "คำอธิบายรายวิชา", payload.get("standards") or [])
+    _rewrite_list_section(doc, "จุดประสงค์รายวิชา", "มาตรฐานรายวิชา", _plist(payload, "objectives"))
+    _rewrite_list_section(doc, "มาตรฐานรายวิชา", "คำอธิบายรายวิชา", _plist(payload, "standards"))
     _rewrite_list_section(doc, "คำอธิบายรายวิชา", "ความรู้", [payload.get("description") or "-"], numbered=False)
-    _rewrite_list_section(doc, "ความรู้", "ทักษะ", payload.get("knowledge") or [])
-    _rewrite_list_section(doc, "ทักษะ", "คุณธรรม", payload.get("skills") or [])
+    _rewrite_list_section(doc, "ความรู้", "ทักษะ", _plist(payload, "knowledge"))
+    _rewrite_list_section(doc, "ทักษะ", "คุณธรรม", _plist(payload, "skills"))
 
-    morals = payload.get("morals") or [
+    morals = _plist(payload, "morals") or [
         "ความมีวินัย ตรงต่อเวลา และปฏิบัติงานตามกฎความปลอดภัยในห้องปฏิบัติการอย่างเคร่งครัด",
         "ความซื่อสัตย์สุจริต ความสนใจใฝ่รู้ และความรับผิดชอบต่อหน้าที่ที่ได้รับมอบหมาย",
     ]
     _rewrite_list_section(doc, "คุณธรรม", "ตัวชี้วัด", morals)
 
-    # Clear extra sample indicators/strategies or use custom ones if provided
-    strategies = payload.get("instructional_strategies") or [
+    indicators = _plist(payload, "indicators")
+    if indicators:
+        _rewrite_list_section(doc, "ตัวชี้วัด", "วิธีการสอน", indicators)
+
+    strategies = _plist(payload, "instructional_strategies") or [
         "การจัดการเรียนการสอนเชิงรุก (Active Learning) เน้นการลงมือปฏิบัติจริงตามสมรรถนะอาชีพ",
         "บูรณาการการแก้ปัญหาและการทำงานร่วมกันเป็นทีมควบคู่กับคุณธรรมจริยธรรมวิชาชีพ",
     ]
     _rewrite_list_section(doc, "วิธีการสอน", "เกณฑ์การประเมินผล", strategies, numbered=False)
 
-    # Refresh weekly table header text
+    eval_criteria = _plist(payload, "evaluation_criteria")
+    if eval_criteria:
+        _rewrite_list_section(doc, "เกณฑ์การประเมินผล", "รายละเอียดกำหนดการสอน", eval_criteria, numbered=False)
+
+    weeks = _plist(payload, "weekly_plan")
+    total_hours = payload.get("total_hours") or sum(
+        int(w.get("theory_hours") or 1) + int(w.get("practice_hours") or 3) for w in weeks
+    ) or 72
+    weeks_cnt = len(weeks) or 18
     for p in doc.paragraphs:
         if "รายละเอียดกำหนดการสอน" in p.text:
-            total_hours = payload.get("total_hours") or 72
-            weeks_cnt = len(payload.get("weekly_plan") or []) or 18
-            _set_para_text(p, f"รายละเอียดกำหนดการสอน   ชื่อวิชา : {name}    {weeks_cnt}  สัปดาห์   {total_hours}  ชั่วโมง")
+            _set_para_text(
+                p,
+                f"รายละเอียดกำหนดการสอน   ชื่อวิชา : {name}    {weeks_cnt}  สัปดาห์   {total_hours}  ชั่วโมง",
+                font_name=DEFAULT_FONT,
+                font_size_pt=16.0,
+                bold=True,
+            )
             break
 
     notes = payload.get("notes") or ["รายละเอียดการสอนปรับยืดหยุ่นได้ตามศักยภาพผู้เรียนและปฏิทินปฏิบัติการของวิทยาลัย"]
@@ -212,25 +711,31 @@ def generate_course_syllabus(
         for line in notes:
             p_new = doc.add_paragraph(f"\t{line}")
             for r in p_new.runs:
-                r.font.name = "TH SarabunPSK"
-                r.font.size = Pt(16)
+                _apply_run_font(r, DEFAULT_FONT, 15.5)
+
+    # Fit Table 0 cleanly to 18.0 cm printable width
+    if len(doc.tables) > 0:
+        _style_table(doc.tables[0], [2.4, 2.0, 4.3, 0.6, 2.4, 2.0, 4.3], border_color="94A3B8", header_repeat=True)
 
     # Populate Table 1: 18-week schedule
-    weeks = payload.get("weekly_plan") or []
     if len(doc.tables) > 1:
         t1 = doc.tables[1]
         _sync_table_rows(t1, max(1, len(weeks)), header_rows=1)
         for idx, wk in enumerate(weeks, start=1):
             row = t1.rows[idx]
-            _set_cell_text(row.cells[0], str(wk.get("week") or idx))
-            _set_cell_text(row.cells[1], str(wk.get("topic") or ""))
-            _set_cell_text(row.cells[2], str(wk.get("activities") or ""))
-            _set_cell_text(row.cells[3], str(wk.get("media") or ""))
-            _set_cell_text(row.cells[4], str(wk.get("evaluation") or ""))
-            _set_cell_text(row.cells[5], str(wk.get("competency") or ""))
+            _set_cell_text(row.cells[0], str(wk.get("week") or idx), font_name=DEFAULT_FONT, size_pt=14.0)
+            _set_cell_text(row.cells[1], str(wk.get("topic") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
+            _set_cell_text(row.cells[2], str(wk.get("activities") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
+            _set_cell_text(row.cells[3], str(wk.get("media") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
+            _set_cell_text(row.cells[4], str(wk.get("evaluation") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
+            _set_cell_text(row.cells[5], str(wk.get("competency") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
         if not weeks:
             for c in range(6):
-                _set_cell_text(t1.rows[1].cells[c], "-")
+                _set_cell_text(t1.rows[1].cells[c], "-", font_name=DEFAULT_FONT, size_pt=14.0)
+        _style_table(t1, [1.3, 3.7, 4.2, 2.8, 3.0, 3.0], border_color="475569", header_repeat=True)
+
+    if payload.get("include_approval_block", True):
+        _append_lesson_approval_block(doc, payload, org_profile)
 
     fname = f"{prefix}_กำหนดการสอน_{code}.docx".replace("/", "-")
     fpath = out_dir / fname
@@ -257,31 +762,61 @@ def generate_lesson_plan(
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     doc = docx.Document(resolve_system_template("teaching/2_lesson_plan.docx"))
+    _set_a4_section(doc, top_cm=1.8, bottom_cm=1.8, left_cm=2.0, right_cm=1.8)  # 17.2 cm printable width
 
     code = payload.get("course_code") or "-"
     name = payload.get("course_name") or "-"
     level = payload.get("curriculum_level") or "ปวช."
     credits = payload.get("credits") or "1-3-2"
-    std_link = payload.get("qualification_link") or "มาตรฐานคุณวุฒิอาชีวศึกษา"
+    std_link = payload.get("qualification_link") or "มาตรฐานคุณวุฒิอาชีวศึกษา พ.ศ. 2567"
+    weeks = _plist(payload, "weekly_plan")
+    weeks_cnt = len(weeks) or 18
 
     ps = doc.paragraphs
-    _set_para_text(ps[0], f"แผนการจัดการเรียนรู้เชิงรุกมุ่งเน้นสมรรถนะ วิชา {name} (รหัสวิชา {code})")
-    _set_para_text(ps[2], payload.get("curriculum_context") or f"การจัดการเรียนการสอนในหลักสูตร {level} รายวิชา {code} {name} ตามกรอบมาตรฐานคุณวุฒิอาชีวศึกษา")
+    _set_para_text(ps[0], f"แผนการจัดการเรียนรู้เชิงรุกมุ่งเน้นสมรรถนะ วิชา {name} (รหัสวิชา {code})", font_name=DEFAULT_FONT, font_size_pt=18.0, bold=True)
+    _set_para_text(
+        ps[2],
+        payload.get("curriculum_context")
+        or f"การจัดการเรียนการสอนในหลักสูตร {level} รายวิชา {code} {name} ตามกรอบมาตรฐานคุณวุฒิอาชีวศึกษา",
+        font_name=DEFAULT_FONT,
+        font_size_pt=16.0,
+    )
 
-    _rewrite_list_section(doc, "จุดประสงค์รายวิชา", "สมรรถนะรายวิชา", payload.get("objectives") or [])
-    _rewrite_list_section(doc, "สมรรถนะรายวิชา", "คำอธิบายรายวิชา", payload.get("standards") or [])
+    _rewrite_list_section(doc, "จุดประสงค์รายวิชา", "สมรรถนะรายวิชา", _plist(payload, "objectives"))
+    _rewrite_list_section(doc, "สมรรถนะรายวิชา", "คำอธิบายรายวิชา", _plist(payload, "standards"))
     _rewrite_list_section(doc, "คำอธิบายรายวิชา", "การวิเคราะห์หน่วยการเรียนรู้", [payload.get("description") or "-"], numbered=False)
+
+    # Clear leftover networking analysis paragraphs between heading and detail_idx
+    analysis_idx = next((i for i, p in enumerate(doc.paragraphs) if "การวิเคราะห์หน่วยการเรียนรู้" in p.text), None)
+    detail_idx = next((i for i, p in enumerate(doc.paragraphs) if "รายละเอียดแผนการจัดกิจกรรมการเรียนรู้รายสัปดาห์" in p.text), None)
+    if analysis_idx is not None:
+        _set_para_text(
+            doc.paragraphs[analysis_idx],
+            f"การวิเคราะห์หน่วยการเรียนรู้และตารางกระจายเวลาเรียน ({weeks_cnt} สัปดาห์)",
+            font_name=DEFAULT_FONT,
+            font_size_pt=16.0,
+            bold=True,
+        )
+        if detail_idx is not None and detail_idx > analysis_idx + 1:
+            for p in doc.paragraphs[analysis_idx + 1 : detail_idx]:
+                _remove_para(p)
+            analysis_text = (
+                payload.get("curriculum_analysis")
+                or f"จัดลำดับหน่วยการเรียนรู้รายวิชา {name} ({code}) รวม {weeks_cnt} สัปดาห์ "
+                f"โดยบูรณาการความรู้ภาคทฤษฎีควบคู่การลงมือปฏิบัติจริงตามสมรรถนะวิชาชีพ"
+            )
+            _insert_para_before(doc.paragraphs[analysis_idx + 1], analysis_text, font_name=DEFAULT_FONT, size_pt=15.5)
 
     # T0: Course Overview 5x2
     if len(doc.tables) > 0:
         t0 = doc.tables[0]
-        _set_cell_text(t0.rows[1].cells[1], f"{code} {name}")
-        _set_cell_text(t0.rows[2].cells[1], level)
-        _set_cell_text(t0.rows[3].cells[1], credits)
-        _set_cell_text(t0.rows[4].cells[1], std_link)
+        _set_cell_text(t0.rows[1].cells[1], f"{code} {name}", font_name=DEFAULT_FONT, size_pt=14.5)
+        _set_cell_text(t0.rows[2].cells[1], level, font_name=DEFAULT_FONT, size_pt=14.5)
+        _set_cell_text(t0.rows[3].cells[1], credits, font_name=DEFAULT_FONT, size_pt=14.5)
+        _set_cell_text(t0.rows[4].cells[1], std_link, font_name=DEFAULT_FONT, size_pt=14.5)
+        _style_table(t0, [5.2, 12.0], border_color="475569", header_repeat=True)
 
     # T1: 18-week summary table
-    weeks = payload.get("weekly_plan") or []
     if len(doc.tables) > 1:
         t1 = doc.tables[1]
         _sync_table_rows(t1, max(1, len(weeks)), header_rows=1)
@@ -289,78 +824,144 @@ def generate_lesson_plan(
             row = t1.rows[idx]
             th_h = int(wk.get("theory_hours") or 1)
             pr_h = int(wk.get("practice_hours") or 3)
-            _set_cell_text(row.cells[0], str(wk.get("week") or idx))
-            _set_cell_text(row.cells[1], str(wk.get("topic") or ""))
-            _set_cell_text(row.cells[2], str(th_h))
-            _set_cell_text(row.cells[3], str(pr_h))
-            _set_cell_text(row.cells[4], str(th_h + pr_h))
-            _set_cell_text(row.cells[5], str(wk.get("evaluation") or ""))
+            _set_cell_text(row.cells[0], str(wk.get("week") or idx), font_name=DEFAULT_FONT, size_pt=14.0)
+            _set_cell_text(row.cells[1], str(wk.get("topic") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
+            _set_cell_text(row.cells[2], str(th_h), font_name=DEFAULT_FONT, size_pt=14.0)
+            _set_cell_text(row.cells[3], str(pr_h), font_name=DEFAULT_FONT, size_pt=14.0)
+            _set_cell_text(row.cells[4], str(th_h + pr_h), font_name=DEFAULT_FONT, size_pt=14.0)
+            _set_cell_text(row.cells[5], str(wk.get("evaluation") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
+        if not weeks:
+            for c in range(6):
+                _set_cell_text(t1.rows[1].cells[c], "-", font_name=DEFAULT_FONT, size_pt=14.0)
+        _style_table(t1, [1.5, 6.2, 1.8, 1.8, 1.8, 4.1], border_color="475569", header_repeat=True)
 
-    # T2: Equipment & Tools
-    equipment = payload.get("equipment") or []
-    if len(doc.tables) > 2 and equipment:
+    # Cleanly remove leftover P19..end weekly paragraphs BEFORE inserting T2..T4 headings!
+    detail_idx = next((i for i, p in enumerate(doc.paragraphs) if "รายละเอียดแผนการจัดกิจกรรมการเรียนรู้รายสัปดาห์" in p.text), None)
+    if detail_idx is not None:
+        for p in doc.paragraphs[detail_idx:]:
+            _remove_para(p)
+
+    # T2: Equipment & Tools — always replace template networking defaults
+    equipment = _plist(payload, "equipment") or [
+        {"category": "เอกสารและสื่อการสอน", "item": f"เอกสารประกอบการสอน สไลด์ และใบงานวิชา {name}", "purpose": "ใช้อธิบายหลักการ ขั้นตอน และมอบหมายฝึกปฏิบัติ"},
+        {"category": "เครื่องมือ/ห้องปฏิบัติการ", "item": f"ชุดฝึกปฏิบัติและเครื่องมือมาตรฐานประจำสาขาวิชา ({name})", "purpose": "ใช้ฝึกทักษะปฏิบัติงานจริงตามเกณฑ์สมรรถนะ"},
+        {"category": "สื่อดิจิทัล/แหล่งเรียนรู้", "item": "ห้องเรียนออนไลน์ คู่มือมาตรฐานอาชีพ และกรณีศึกษา", "purpose": "ใช้ทบทวนความรู้ ค้นคว้าเพิ่มเติม และส่งชิ้นงาน"},
+    ]
+    if len(doc.tables) > 2:
         t2 = doc.tables[2]
+        _ensure_heading_before_table(t2, "ทรัพยากร สื่อ อุปกรณ์ และแหล่งเรียนรู้")
         _sync_table_rows(t2, len(equipment), header_rows=1)
         for idx, eq in enumerate(equipment, start=1):
             row = t2.rows[idx]
-            _set_cell_text(row.cells[0], str(eq.get("category") or ""))
-            _set_cell_text(row.cells[1], str(eq.get("item") or ""))
-            _set_cell_text(row.cells[2], str(eq.get("purpose") or ""))
+            _set_cell_text(row.cells[0], str(eq.get("category") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
+            _set_cell_text(row.cells[1], str(eq.get("item") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
+            _set_cell_text(row.cells[2], str(eq.get("purpose") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
+        _style_table(t2, [4.2, 6.2, 6.8], border_color="475569", header_repeat=True)
 
     # T3: Assessment domains
-    assessment = payload.get("assessment") or []
-    if len(doc.tables) > 3 and assessment:
+    assessment = _plist(payload, "assessment") or [
+        {"domain": "ด้านความรู้ (Cognitive Domain)", "weight": "30%", "method": "แบบทดสอบย่อย กลางภาค และปลายภาค", "criteria": f"อธิบายหลักการสำคัญของวิชา {name} ได้ตามเกณฑ์"},
+        {"domain": "ด้านทักษะ (Psychomotor Domain)", "weight": "50%", "method": "ตรวจใบงาน การฝึกปฏิบัติ และชิ้นงาน", "criteria": "ปฏิบัติงานครบขั้นตอน ถูกต้อง และปลอดภัย"},
+        {"domain": "ด้านจิตพิสัย (Affective Domain)", "weight": "20%", "method": "แบบสังเกตพฤติกรรม การเข้าเรียน ความรับผิดชอบ", "criteria": "มีเวลาเรียน >= 80% และส่งงานตรงเวลา"},
+    ]
+    if len(doc.tables) > 3:
         t3 = doc.tables[3]
+        _ensure_heading_before_table(t3, "โครงสร้างการวัดและประเมินผล")
         _sync_table_rows(t3, len(assessment), header_rows=1)
         for idx, a in enumerate(assessment, start=1):
             row = t3.rows[idx]
-            _set_cell_text(row.cells[0], str(a.get("domain") or ""))
-            _set_cell_text(row.cells[1], str(a.get("weight") or ""))
-            _set_cell_text(row.cells[2], str(a.get("method") or ""))
-            _set_cell_text(row.cells[3], str(a.get("criteria") or ""))
+            _set_cell_text(row.cells[0], str(a.get("domain") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
+            _set_cell_text(row.cells[1], str(a.get("weight") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
+            _set_cell_text(row.cells[2], str(a.get("method") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
+            _set_cell_text(row.cells[3], str(a.get("criteria") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
+        _style_table(t3, [4.2, 1.8, 5.4, 5.8], border_color="475569", header_repeat=True)
 
-    # T4: Rubric
-    rubric = payload.get("rubric") or []
-    if len(doc.tables) > 4 and rubric:
+    # T4: Rubric — always replace template networking defaults
+    rubric = _plist(payload, "rubric") or [
+        {
+            "dimension": f"1. ความรู้ความเข้าใจหลักการ ({name})",
+            "level4": "อธิบายหลักการ เชื่อมโยงขั้นตอน และวิเคราะห์ปัญหาได้ครบถ้วน",
+            "level3": "อธิบายหลักการและขั้นตอนสำคัญได้ถูกต้องเกือบทั้งหมด",
+            "level2": "อธิบายได้บางส่วน ต้องได้รับคำแนะนำเพิ่มเติม",
+            "level1": "ยังไม่สามารถอธิบายหลักการพื้นฐานได้",
+        },
+        {
+            "dimension": "2. ทักษะการปฏิบัติงานตามใบงาน",
+            "level4": "ปฏิบัติงานถูกต้อง แม่นยำ คล่องแคล่ว และเสร็จตามเวลา",
+            "level3": "ปฏิบัติงานสำเร็จตามขั้นตอนหลัก อาจมีข้อบกพร่องเล็กน้อย",
+            "level2": "ปฏิบัติงานได้บางขั้นตอน ต้องมีผู้สอนคอยกำกับดูแล",
+            "level1": "ปฏิบัติงานไม่สำเร็จหรือเกิดข้อผิดพลาดสำคัญ",
+        },
+        {
+            "dimension": "3. ความปลอดภัย ระเบียบวินัย และคุณธรรม",
+            "level4": "ปฏิบัติตามกฎความปลอดภัย ดูแลเครื่องมือ และทำงานเป็นทีมดีเยี่ยม",
+            "level3": "ปฏิบัติตามระเบียบและกฎความปลอดภัยอย่างสม่ำเสมอ",
+            "level2": "ปฏิบัติตามระเบียบได้เป็นส่วนใหญ่ ต้องตักเตือนบ้าง",
+            "level1": "ละเลยกฎความปลอดภัยหรือไม่รับผิดชอบต่อหน้าที่",
+        },
+    ]
+    if len(doc.tables) > 4:
         t4 = doc.tables[4]
+        _ensure_heading_before_table(t4, "เกณฑ์การประเมินสมรรถนะการปฏิบัติงาน (Rubric Scoring)")
         _sync_table_rows(t4, len(rubric), header_rows=1)
         for idx, rb in enumerate(rubric, start=1):
             row = t4.rows[idx]
-            _set_cell_text(row.cells[0], str(rb.get("dimension") or ""))
-            _set_cell_text(row.cells[1], str(rb.get("level4") or ""))
-            _set_cell_text(row.cells[2], str(rb.get("level3") or ""))
-            _set_cell_text(row.cells[3], str(rb.get("level2") or ""))
-            _set_cell_text(row.cells[4], str(rb.get("level1") or ""))
+            _set_cell_text(row.cells[0], str(rb.get("dimension") or ""), font_name=DEFAULT_FONT, size_pt=13.5)
+            _set_cell_text(row.cells[1], str(rb.get("level4") or ""), font_name=DEFAULT_FONT, size_pt=13.5)
+            _set_cell_text(row.cells[2], str(rb.get("level3") or ""), font_name=DEFAULT_FONT, size_pt=13.5)
+            _set_cell_text(row.cells[3], str(rb.get("level2") or ""), font_name=DEFAULT_FONT, size_pt=13.5)
+            _set_cell_text(row.cells[4], str(rb.get("level1") or ""), font_name=DEFAULT_FONT, size_pt=13.5)
+        _style_table(t4, [3.6, 3.4, 3.4, 3.4, 3.4], border_color="475569", header_repeat=True)
 
-    # Replace P19..end (old weekly lesson blocks) cleanly with new weekly plans
-    detail_idx = next((i for i, p in enumerate(doc.paragraphs) if "รายละเอียดแผนการจัดกิจกรรมการเรียนรู้รายสัปดาห์" in p.text), None)
-    if detail_idx is not None:
-        for p in doc.paragraphs[detail_idx + 1 :]:
-            _remove_para(p)
+    # Append crisp weekly section heading + structured weekly lesson plan tables AFTER T4
+    if weeks:
+        p_w_hdr = doc.add_paragraph()
+        p_w_hdr.paragraph_format.space_before = Pt(12)
+        p_w_hdr.paragraph_format.space_after = Pt(4)
+        p_w_hdr.paragraph_format.keep_with_next = True
+        _apply_run_font(
+            p_w_hdr.add_run(f"รายละเอียดแผนการจัดกิจกรรมการเรียนรู้รายสัปดาห์ (สัปดาห์ที่ 1 - {weeks_cnt})"),
+            DEFAULT_FONT,
+            16.0,
+            bold=True,
+        )
         for idx, wk in enumerate(weeks, start=1):
             w_num = wk.get("week") or idx
-            p_h = doc.add_paragraph()
-            r = p_h.add_run(f"สัปดาห์ที่ {w_num}: {wk.get('topic') or ''}")
-            r.bold = True
-            r.font.name = "TH Sarabun New"
-            r.font.size = Pt(16)
+            th_h = int(wk.get("theory_hours") or 1)
+            pr_h = int(wk.get("practice_hours") or 3)
+            spacer = doc.add_paragraph()
+            spacer.paragraph_format.space_before = Pt(4)
+            spacer.paragraph_format.space_after = Pt(2)
+            spacer.paragraph_format.keep_with_next = True
 
-            fields = [
-                ("หัวข้อการจัดการเรียนรู้", wk.get("subtopics") or wk.get("topic") or "-"),
+            wt = doc.add_table(rows=6, cols=2)
+            hdr_cell = wt.rows[0].cells[0].merge(wt.rows[0].cells[1])
+            _shade_cell(hdr_cell, "E2E8F0")
+            _set_cell_text(
+                hdr_cell,
+                f"สัปดาห์ที่ {w_num} : {wk.get('topic') or '-'}   (ทฤษฎี {th_h} ชม. / ปฏิบัติ {pr_h} ชม. / รวม {th_h + pr_h} ชม.)",
+                font_name=DEFAULT_FONT,
+                size_pt=15.0,
+                bold=True,
+            )
+
+            rows_data = [
+                ("หัวข้อ / สาระการเรียนรู้", wk.get("subtopics") or wk.get("topic") or "-"),
                 ("จุดประสงค์เชิงพฤติกรรม", wk.get("behavioral_objectives") or wk.get("competency") or "-"),
                 ("กิจกรรมการจัดการเรียนรู้", wk.get("activities") or "-"),
                 ("สื่อ อุปกรณ์ และแหล่งเรียนรู้", wk.get("media") or "-"),
                 ("ภาระงานและการประเมินผล", wk.get("evaluation") or "-"),
             ]
-            for label, val in fields:
-                p_f = doc.add_paragraph()
-                r1 = p_f.add_run(f"{label}: ")
-                r1.bold = True
-                r1.font.name = "TH Sarabun New"
-                r1.font.size = Pt(16)
-                r2 = p_f.add_run(str(val))
-                r2.font.name = "TH Sarabun New"
-                r2.font.size = Pt(16)
+            for r_idx, (label, val) in enumerate(rows_data, start=1):
+                c0, c1 = wt.rows[r_idx].cells[0], wt.rows[r_idx].cells[1]
+                _shade_cell(c0, "F8FAFC")
+                _set_cell_margins(c0, 60, 60, 100, 100)
+                _set_cell_margins(c1, 60, 60, 100, 100)
+                _set_cell_text(c0, label, font_name=DEFAULT_FONT, size_pt=14.5, bold=True)
+                _set_cell_text(c1, str(val), font_name=DEFAULT_FONT, size_pt=14.5)
+            _style_table(wt, [4.6, 12.6], border_color="64748B", header_repeat=False)
+
+    _append_lesson_approval_block(doc, payload, org_profile)
 
     fname = f"{prefix}_แผนการจัดการเรียนรู้_{code}.docx".replace("/", "-")
     fpath = out_dir / fname
@@ -387,11 +988,9 @@ def generate_post_teaching_normal(
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     org_name = org_profile.get("organization_name") or "วิทยาลัยการอาชีพเชียงราย"
-    dir_name = (org_profile.get("director") or {}).get("name") or "............................................................"
-    dir_title = (org_profile.get("director") or {}).get("title") or f"ผู้อำนวยการ{org_name}"
-
     department = payload.get("department_name") or "แผนกวิชา"
     division = payload.get("division_name") or "ฝ่ายวิชาการ"
+    doc_no = payload.get("doc_number") or "ฝว............/2569"
     doc_date = format_thai_date(payload.get("doc_date"))
     instructor = payload.get("instructor_name") or "ครูผู้สอน"
     position = payload.get("instructor_title") or "ครู"
@@ -399,41 +998,51 @@ def generate_post_teaching_normal(
     w_end = payload.get("week_end") or 4
     semester = payload.get("semester") or f"2/{current_buddhist_year()}"
     subjects = payload.get("subjects") or []
+    sigs = payload.get("signatures") if isinstance(payload.get("signatures"), dict) else {}
 
     # 3a. Cover Memo
     memo_doc = docx.Document(resolve_system_template("teaching/3a_post_teaching_memo.docx"))
+    _set_a4_section(memo_doc, top_cm=1.5, bottom_cm=1.5, left_cm=3.0, right_cm=2.0)
+
     ps = memo_doc.paragraphs
-    _set_para_text(ps[2], f"ส่วนราชการ  {department}  {division}  {org_name}\t")
-    _set_para_text(ps[3], f"ที่\tวันที่ {doc_date}\t")
+    _set_para_text(ps[2], f"ส่วนราชการ  {department}  {division}  {org_name}\t", font_name="TH SarabunIT๙", font_size_pt=16.0)
+    _set_para_text(
+        ps[3],
+        f"ที่ {to_thai_digits(str(doc_no))}\tวันที่ {doc_date}\t",
+        font_name="TH SarabunIT๙",
+        font_size_pt=16.0,
+    )
     _set_para_text(
         ps[6],
-        f"\tข้าพเจ้า {instructor}  ตำแหน่ง {position} {department} "
-        f"ขอรายงานการบันทึกหลังการสอน สัปดาห์ที่ {w_start} ถึง {w_end} ดังนี้",
+        to_thai_digits(
+            f"\tข้าพเจ้า {instructor}  ตำแหน่ง {position} {department} "
+            f"ขอรายงานการบันทึกหลังการสอน สัปดาห์ที่ {w_start} ถึง {w_end} ดังนี้"
+        ),
+        font_name="TH SarabunIT๙",
+        font_size_pt=16.0,
     )
-    _set_para_text(ps[17], f"({dir_name})")
-    _set_para_text(ps[18], dir_title)
 
     if len(memo_doc.tables) > 0:
-        _set_cell_text(memo_doc.tables[0].rows[0].cells[1], f"รายงานการบันทึกหลังการสอน สัปดาห์ที่ {w_start} ถึง {w_end}  ภาคเรียนที่ {semester}")
+        _set_cell_text(
+            memo_doc.tables[0].rows[0].cells[1],
+            to_thai_digits(f"รายงานการบันทึกหลังการสอน สัปดาห์ที่ {w_start} ถึง {w_end}  ภาคเรียนที่ {semester}"),
+            font_name="TH SarabunIT๙",
+            size_pt=16.0,
+        )
     if len(memo_doc.tables) > 1:
-        _set_cell_text(memo_doc.tables[1].rows[0].cells[1], dir_title)
+        dir_title = (org_profile.get("director") or {}).get("title") or f"ผู้อำนวยการ{org_name}"
+        _set_cell_text(memo_doc.tables[1].rows[0].cells[1], dir_title, font_name="TH SarabunIT๙", size_pt=16.0)
     if len(memo_doc.tables) > 2:
         t2 = memo_doc.tables[2]
         _sync_table_rows(t2, max(1, len(subjects)), header_rows=1)
         for idx, sub in enumerate(subjects, start=1):
             row = t2.rows[idx]
-            _set_cell_text(row.cells[0], str(idx))
-            _set_cell_text(row.cells[1], str(sub.get("course_code") or "-"))
-            _set_cell_text(row.cells[2], str(sub.get("course_name") or "-"))
-    if len(memo_doc.tables) > 3:
-        t3 = memo_doc.tables[3]
-        dept_head = payload.get("dept_head_name") or ".........................................................."
-        curr_head = payload.get("curriculum_head_name") or ".........................................................."
-        deputy_acad = payload.get("deputy_academic_name") or ".........................................................."
-        _set_cell_text(t3.rows[0].cells[0], f"ลงชื่อ..........................................ผู้รายงาน\n({instructor})\nตำแหน่ง {position}")
-        _set_cell_text(t3.rows[0].cells[2], f"ลงชื่อ......................................................\n({dept_head})\nหัวหน้า{department}")
-        _set_cell_text(t3.rows[2].cells[0], f"ลงชื่อ......................................................\n({curr_head})\nหัวหน้างานพัฒนาหลักสูตรการเรียนการสอน")
-        _set_cell_text(t3.rows[2].cells[2], f"ลงชื่อ......................................................\n({deputy_acad})\nรองผู้อำนวยการ{division}")
+            _set_cell_text(row.cells[0], to_thai_digits(str(idx)), font_name="TH SarabunIT๙", size_pt=15.0)
+            _set_cell_text(row.cells[1], str(sub.get("course_code") or "-"), font_name="TH SarabunIT๙", size_pt=15.0)
+            _set_cell_text(row.cells[2], str(sub.get("course_name") or "-"), font_name="TH SarabunIT๙", size_pt=15.0)
+        _style_table(t2, [2.0, 4.2, 9.8], border_color="475569", header_repeat=True)
+
+    _apply_cover_signatures(memo_doc, payload, org_profile, department, division, instructor, position)
 
     generated_paths: list[Path] = []
     labels: list[tuple[str, str]] = []
@@ -443,8 +1052,14 @@ def generate_post_teaching_normal(
     labels.append(("memo", f"บันทึกข้อความปะหน้า (สัปดาห์ {w_start}-{w_end})"))
 
     # 3b. Per-subject Post-Teaching Sheet
+    instr_sig = _resolve_sig_path(sigs.get("instructor"))
+    dept_sig = _resolve_sig_path(sigs.get("dept_head"))
+    dept_head = payload.get("dept_head_name") or ".........................................................."
+
     for idx, sub in enumerate(subjects, start=1):
         s_doc = docx.Document(resolve_system_template("teaching/3b_post_teaching_sheet.docx"))
+        _set_a4_section(s_doc, top_cm=1.5, bottom_cm=1.5, left_cm=2.0, right_cm=1.5)  # 17.5 cm printable width
+
         code = sub.get("course_code") or f"subj{idx}"
         cname = sub.get("course_name") or "-"
         unit_title = sub.get("unit_title") or "-"
@@ -454,22 +1069,23 @@ def generate_post_teaching_normal(
         pct = round((passed_st / total_st) * 100, 1) if total_st > 0 else 0
         pct_str = f"{int(pct)}" if pct == int(pct) else f"{pct}"
         weekly_att = sub.get("weekly_attendance") or f"สัปดาห์ที่ {w_start}-{w_end} เข้าเรียนครบ"
-        eval_note = sub.get("evaluation_summary") or f"ผ่านเกณฑ์การประเมินตามจุดประสงค์เชิงพฤติกรรม"
+        eval_note = sub.get("evaluation_summary") or "ผ่านเกณฑ์การประเมินตามจุดประสงค์เชิงพฤติกรรม"
         problems = sub.get("problems") or "-"
         solutions = sub.get("solutions") or "-"
 
-        left_text = (
-            "1) ข้อสรุปหลังการสอน\n"
-            "    1.1) จำนวนผู้เรียนที่ผ่านจุดประสงค์เชิงพฤติกรรม\n"
-            f"วิชา  {cname}  รหัสวิชา  {code}\n"
-            f"หน่วย/เรื่อง  {unit_title}\n"
-            f"ตามเกณฑ์การประเมินผลผู้เรียน กลุ่ม {group}\n"
-            f"{weekly_att}\n\n"
-            f"ผ่านเกณฑ์ประเมิน {passed_st} จาก {total_st} คน  คิดเป็นร้อยละ {pct_str}\n"
-            f"    1.2) ผลการประเมินผู้เรียน\n{eval_note}\n"
-            f"2) ปัญหาที่พบ  {problems}\n"
-            f"3) แนวทางแก้ปัญหา  {solutions}"
-        )
+        left_lines: list[tuple[str, bool]] = [
+            ("๑) ข้อสรุปหลังการสอน", True),
+            ("    ๑.๑) จำนวนผู้เรียนที่ผ่านจุดประสงค์เชิงพฤติกรรม", True),
+            (f"วิชา  {cname}  รหัสวิชา  {code}", False),
+            (to_thai_digits(f"หน่วย/เรื่อง  {unit_title}"), False),
+            (to_thai_digits(f"ตามเกณฑ์การประเมินผลผู้เรียน กลุ่ม {group}"), False),
+            (to_thai_digits(str(weekly_att)), False),
+            (to_thai_digits(f"ผ่านเกณฑ์ประเมิน {passed_st} จาก {total_st} คน  คิดเป็นร้อยละ {pct_str}"), True),
+            ("    ๑.๒) ผลการประเมินผู้เรียน", True),
+            (to_thai_digits(str(eval_note)), False),
+            (to_thai_digits(f"๒) ปัญหาที่พบ  {problems}"), False),
+            (to_thai_digits(f"๓) แนวทางแก้ปัญหา  {solutions}"), False),
+        ]
 
         cb = lambda cond: "☑" if cond else "☐"
         content_ok = sub.get("content_completed", True)
@@ -479,30 +1095,85 @@ def generate_post_teaching_normal(
         assess_ok = sub.get("assessment_suitable", True)
         other_note = sub.get("other_note") or "......................................................."
 
-        right_text = (
-            "1) สอนตามแผนการจัดการเรียนรู้\n"
-            f"     {cb(content_ok)} ครบตามเนื้อหา\n"
-            f"     {cb(not content_ok)} ไม่ครบ เนื่องจาก {sub.get('content_note') or '...............................'}\n"
-            "2) เวลาที่ใช้สอน\n"
-            f"     {cb(time_ok)} พอเพียง\n"
-            f"     {cb(not time_ok)} ไม่พอเพียง เนื่องจาก {sub.get('time_note') or '.........................'}\n"
-            "3) สื่อ/อุปกรณ์ที่ใช้ตามกำหนด\n"
-            f"     {cb(media_ok)} เหมาะสม\n"
-            f"     {cb(not media_ok)} ไม่เหมาะสม เนื่องจาก {sub.get('media_note') or '.......................'}\n"
-            "4) กิจกรรมการสอน\n"
-            f"     {cb(act_ok)} เหมาะสม\n"
-            f"     {cb(not act_ok)} ไม่เหมาะสม เนื่องจาก {sub.get('activities_note') or '.......................'}\n"
-            "5) เครื่องมือวัดและประเมินผล\n"
-            f"     {cb(assess_ok)} เหมาะสม\n"
-            f"     {cb(not assess_ok)} ไม่เหมาะสม เนื่องจาก {sub.get('assessment_note') or '.......................'}\n"
-            f"6) อื่นๆ {other_note}"
-        )
+        right_lines: list[tuple[str, bool]] = [
+            ("๑) สอนตามแผนการจัดการเรียนรู้", True),
+            (f"     {cb(content_ok)} ครบตามเนื้อหา", False),
+            (f"     {cb(not content_ok)} ไม่ครบ เนื่องจาก {sub.get('content_note') or '...............................'}", False),
+            ("๒) เวลาที่ใช้สอน", True),
+            (f"     {cb(time_ok)} พอเพียง", False),
+            (f"     {cb(not time_ok)} ไม่พอเพียง เนื่องจาก {sub.get('time_note') or '.........................'}", False),
+            ("๓) สื่อ/อุปกรณ์ที่ใช้ตามกำหนด", True),
+            (f"     {cb(media_ok)} เหมาะสม", False),
+            (f"     {cb(not media_ok)} ไม่เหมาะสม เนื่องจาก {sub.get('media_note') or '.......................'}", False),
+            ("๔) กิจกรรมการสอน", True),
+            (f"     {cb(act_ok)} เหมาะสม", False),
+            (f"     {cb(not act_ok)} ไม่เหมาะสม เนื่องจาก {sub.get('activities_note') or '.......................'}", False),
+            ("๕) เครื่องมือวัดและประเมินผล", True),
+            (f"     {cb(assess_ok)} เหมาะสม", False),
+            (f"     {cb(not assess_ok)} ไม่เหมาะสม เนื่องจาก {sub.get('assessment_note') or '.......................'}", False),
+            (to_thai_digits(f"๖) อื่นๆ {other_note}"), True),
+        ]
 
         if len(s_doc.tables) > 0:
-            _set_cell_text(s_doc.tables[0].rows[2].cells[0], left_text)
-            _set_cell_text(s_doc.tables[0].rows[2].cells[1], right_text)
+            t0 = s_doc.tables[0]
+            c0 = t0.rows[2].cells[0]
+            if c0.tables:
+                # Keep the template's nested attitude-evaluation sub-table between 1.2) and 2)
+                pre_lines = left_lines[:-2]
+                post_lines = left_lines[-2:]
+                sub_tbl = c0.tables[0]
+                for p in list(c0.paragraphs)[1:]:
+                    _remove_para(p)
+                p0 = c0.paragraphs[0]
+                p0.text = ""
+                for l_idx, (txt, is_b) in enumerate(pre_lines):
+                    p = p0 if l_idx == 0 else docx.text.paragraph.Paragraph(OxmlElement("w:p"), c0)
+                    if l_idx > 0:
+                        sub_tbl._element.addprevious(p._element)
+                    p.paragraph_format.space_before = Pt(1)
+                    p.paragraph_format.space_after = Pt(1)
+                    _add_mixed_runs(p, txt, font_name=DEFAULT_FONT, size_pt=14.5, bold=is_b)
+                _style_table(sub_tbl, [3.3, 1.0, 0.9, 1.1, 0.9, 1.0], border_color="64748B", header_repeat=False)
+                for txt, is_b in post_lines:
+                    p_after = c0.add_paragraph()
+                    p_after.paragraph_format.space_before = Pt(2)
+                    p_after.paragraph_format.space_after = Pt(1)
+                    _add_mixed_runs(p_after, txt, font_name=DEFAULT_FONT, size_pt=14.5, bold=is_b)
+            else:
+                _set_cell_lines(c0, left_lines, font_name=DEFAULT_FONT, size_pt=14.5)
+            _set_cell_lines(t0.rows[2].cells[1], right_lines, font_name=DEFAULT_FONT, size_pt=14.5)
+            _style_table(t0, [8.75, 8.75], border_color="334155", header_repeat=False)
+
         if len(s_doc.tables) > 1:
-            _set_cell_text(s_doc.tables[1].rows[0].cells[0], f"ลงชื่อ.....................................ครูผู้สอน\n({instructor})\n{doc_date}")
+            t1_el = s_doc.tables[1]._element
+            parent_el = t1_el.getparent()
+            if parent_el is not None:
+                parent_el.remove(t1_el)
+        sig_tbl = s_doc.add_table(rows=1, cols=2)
+        _clear_table_borders(sig_tbl)
+        sig_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+        _set_row_cant_split(sig_tbl.rows[0])
+        for c in sig_tbl.rows[0].cells:
+            c.width = Cm(8.75)
+            _set_cell_margins(c, 120, 40, 60, 60)
+        _populate_signer_cell(
+            sig_tbl.rows[0].cells[0],
+            instructor,
+            [f"ตำแหน่ง {position}", doc_date],
+            sig_path=instr_sig,
+            role_suffix="ครูผู้สอน",
+            font_name=DEFAULT_FONT,
+            size_pt=14.5,
+        )
+        _populate_signer_cell(
+            sig_tbl.rows[0].cells[1],
+            dept_head,
+            [f"หัวหน้า{department}"],
+            sig_path=dept_sig,
+            role_suffix="ผู้ตรวจสอบ",
+            font_name=DEFAULT_FONT,
+            size_pt=14.5,
+        )
 
         safe_code = str(code).replace("/", "-")
         s_path = out_dir / f"{prefix}_หลังการสอน_{safe_code}_w{w_start}-{w_end}.docx"
@@ -532,9 +1203,9 @@ def generate_online_teaching_report(
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     doc = docx.Document(resolve_system_template("teaching/4_online_teaching_report.docx"))
+    _set_a4_section(doc, top_cm=1.5, bottom_cm=1.5, left_cm=3.0, right_cm=2.0)  # 16.0 cm printable width
 
     org_name = org_profile.get("organization_name") or "วิทยาลัยการอาชีพเชียงราย"
-    dir_name = (org_profile.get("director") or {}).get("name") or "ผู้อำนวยการ"
     dir_title = (org_profile.get("director") or {}).get("title") or f"ผู้อำนวยการ{org_name}"
 
     department = payload.get("department_name") or "แผนกวิชา"
@@ -548,30 +1219,36 @@ def generate_online_teaching_report(
     position = payload.get("instructor_title") or "ครู"
 
     ps = doc.paragraphs
-    _set_para_text(ps[2], f"ส่วนราชการ  {department}  {division}  {org_name}\t")
-    _set_para_text(ps[3], f"ที่ {doc_no}\tวันที่ {doc_date}\t")
+    _set_para_text(ps[2], f"ส่วนราชการ  {department}  {division}  {org_name}\t", font_name="TH SarabunIT๙", font_size_pt=16.0)
+    _set_para_text(ps[3], f"ที่ {to_thai_digits(str(doc_no))}\tวันที่ {doc_date}\t", font_name="TH SarabunIT๙", font_size_pt=16.0)
     _set_para_text(
         ps[6],
-        f"\tข้าพเจ้า {instructor}  ตำแหน่ง {position} {department} ขอรายงานการสอนออนไลน์ระหว่างวันที่ {date_range} ดังนี้",
+        to_thai_digits(
+            f"\tข้าพเจ้า {instructor}  ตำแหน่ง {position} {department} ขอรายงานการสอนออนไลน์ระหว่างวันที่ {date_range} ดังนี้"
+        ),
+        font_name="TH SarabunIT๙",
+        font_size_pt=16.0,
     )
-    _set_para_text(ps[16], "ลงชื่อ.........................................................")
-    _set_para_text(ps[17], f"({dir_name})")
-    _set_para_text(ps[18], dir_title)
 
-    # Trim existing template course sections (keep only cover memo up to P19 + T0..T4, then add sections programmatically)
+    # Trim everything after P18 (including B24 hidden page-break paragraph & template T5..end)
     body = doc.element.body
     children = list(body)
-    # Find element after P19 (index of P18 + 1 empty p) -> start removing from T5 (first "สัปดาห์ที่" box)
-    t5_el = doc.tables[5]._element if len(doc.tables) > 5 else None
-    if t5_el is not None:
-        t5_idx = children.index(t5_el)
-        for el in children[t5_idx:]:
-            if not el.tag.endswith("}sectPr"):
-                body.remove(el)
+    if len(ps) > 18 and ps[18]._element in children:
+        trim_start = children.index(ps[18]._element) + 1
+    else:
+        t5_el = doc.tables[5]._element if len(doc.tables) > 5 else None
+        trim_start = children.index(t5_el) if t5_el is not None else len(children)
+    for el in children[trim_start:]:
+        if not el.tag.endswith("}sectPr"):
+            body.remove(el)
 
-    # Cover tables
-    _set_cell_text(doc.tables[0].rows[0].cells[1], f"รายงานการสอนออนไลน์ สัปดาห์ที่ {week_no}  ภาคเรียนที่ {semester}")
-    _set_cell_text(doc.tables[1].rows[0].cells[1], dir_title)
+    _set_cell_text(
+        doc.tables[0].rows[0].cells[1],
+        to_thai_digits(f"รายงานการสอนออนไลน์ สัปดาห์ที่ {week_no}  ภาคเรียนที่ {semester}"),
+        font_name="TH SarabunIT๙",
+        size_pt=16.0,
+    )
+    _set_cell_text(doc.tables[1].rows[0].cells[1], dir_title, font_name="TH SarabunIT๙", size_pt=16.0)
 
     sessions = payload.get("sessions") or []
     t2 = doc.tables[2]
@@ -581,45 +1258,44 @@ def generate_online_teaching_report(
         total_st = int(ses.get("total_students") or 0)
         present_st = int(ses.get("present_students") or 0)
         pct = round((present_st / total_st) * 100) if total_st > 0 else 0
-        _set_cell_text(row.cells[0], f"{ses.get('date_text') or '-'}\n{ses.get('course_label') or '-'}")
-        _set_cell_text(row.cells[1], str(ses.get("time_text") or "-"))
-        _set_cell_text(row.cells[2], str(ses.get("class_level") or "-"))
-        _set_cell_text(row.cells[3], str(ses.get("major_name") or "-"))
-        _set_cell_text(row.cells[4], str(total_st))
-        _set_cell_text(row.cells[5], str(present_st))
-        _set_cell_text(row.cells[6], f"{pct}%")
+        _set_cell_text(row.cells[0], f"{to_thai_digits(str(ses.get('date_text') or '-'))}\n{ses.get('course_label') or '-'}", font_name="TH SarabunIT๙", size_pt=14.0)
+        _set_cell_text(row.cells[1], to_thai_digits(str(ses.get("time_text") or "-")), font_name="TH SarabunIT๙", size_pt=14.0)
+        _set_cell_text(row.cells[2], to_thai_digits(str(ses.get("class_level") or "-")), font_name="TH SarabunIT๙", size_pt=14.0)
+        _set_cell_text(row.cells[3], str(ses.get("major_name") or "-"), font_name="TH SarabunIT๙", size_pt=14.0)
+        _set_cell_text(row.cells[4], to_thai_digits(str(total_st)), font_name="TH SarabunIT๙", size_pt=14.0)
+        _set_cell_text(row.cells[5], to_thai_digits(str(present_st)), font_name="TH SarabunIT๙", size_pt=14.0)
+        _set_cell_text(row.cells[6], to_thai_digits(f"{pct}%"), font_name="TH SarabunIT๙", size_pt=14.0)
+    if not sessions:
+        for c in range(7):
+            _set_cell_text(t2.rows[1].cells[c], "-", font_name="TH SarabunIT๙", size_pt=14.0)
+    _style_table(t2, [3.8, 2.9, 2.1, 2.1, 1.7, 1.7, 1.7], border_color="475569", header_repeat=True)
 
-    # Signatures on T3
-    if len(doc.tables) > 3:
-        t3 = doc.tables[3]
-        dept_head = payload.get("dept_head_name") or ".........................................................."
-        curr_head = payload.get("curriculum_head_name") or ".........................................................."
-        deputy_acad = payload.get("deputy_academic_name") or ".........................................................."
-        _set_cell_text(t3.rows[0].cells[0], f"ลงชื่อ..........................................ผู้รายงาน\n({instructor})\nตำแหน่ง {position}")
-        _set_cell_text(t3.rows[0].cells[2], f"ลงชื่อ......................................................\n({dept_head})\nหัวหน้า{department}")
-        _set_cell_text(t3.rows[2].cells[0], f"ลงชื่อ......................................................\n({curr_head})\nหัวหน้างานพัฒนาหลักสูตรการเรียนการสอน")
-        _set_cell_text(t3.rows[2].cells[2], f"ลงชื่อ......................................................\n({deputy_acad})\nรองผู้อำนวยการ{division}")
+    _apply_cover_signatures(doc, payload, org_profile, department, division, instructor, position)
 
-    # Append clean per-subject online sections with uploaded screenshots
+    # Append framed card/table per online subject section (16.0 cm width)
     sections = payload.get("online_sections") or []
-    cb = lambda cond: " ✓ " if cond else "   "
-    for idx, sec in enumerate(sections, start=1):
+    cb = lambda cond: "☑" if cond else "☐"
+    for sec in sections:
         doc.add_page_break()
-        h1 = doc.add_paragraph()
-        h1.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        r_h1 = h1.add_run(f"แบบบันทึกหลังการสอนออนไลน์  {org_name}  (สัปดาห์ที่ {week_no})")
-        r_h1.bold = True
-        r_h1.font.name = "TH Sarabun New"
-        r_h1.font.size = Pt(16)
 
-        h2 = doc.add_paragraph()
-        h2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        r_h2 = h2.add_run(
-            f"ภาคเรียนที่ {semester}  |  รหัสวิชา {sec.get('course_code') or '-'}  วิชา {sec.get('course_name') or '-'}"
+        # Box 1: Title Header Table
+        hdr_tbl = doc.add_table(rows=2, cols=1)
+        _shade_cell(hdr_tbl.rows[0].cells[0], "E2E8F0")
+        _set_cell_lines(
+            hdr_tbl.rows[0].cells[0],
+            [(f"แบบบันทึกหลังการสอนออนไลน์  {org_name}  (สัปดาห์ที่ {week_no})", True)],
+            font_name=DEFAULT_FONT,
+            size_pt=16.0,
+            align=WD_ALIGN_PARAGRAPH.CENTER,
         )
-        r_h2.bold = True
-        r_h2.font.name = "TH Sarabun New"
-        r_h2.font.size = Pt(15)
+        _set_cell_lines(
+            hdr_tbl.rows[1].cells[0],
+            [(f"ภาคเรียนที่ {semester}  |  รหัสวิชา {sec.get('course_code') or '-'}  วิชา {sec.get('course_name') or '-'}", True)],
+            font_name=DEFAULT_FONT,
+            size_pt=15.0,
+            align=WD_ALIGN_PARAGRAPH.CENTER,
+        )
+        _style_table(hdr_tbl, [16.0], border_color="334155", header_repeat=False)
 
         total_st = int(sec.get("total_students") or 0)
         present_st = int(sec.get("present_students") or 0)
@@ -628,84 +1304,130 @@ def generate_online_teaching_report(
         system_type = sec.get("system_type") or "ทวิภาคี"
         tools = set(sec.get("tools") or [])
 
-        info_lines = [
-            f"ผู้สอน: {instructor}   แผนกวิชา: {sec.get('department_name') or department}",
-            f"ระดับชั้น ({cb(level_type == 'ปวช.')}) ปวช.   ({cb(level_type == 'ปวส.')}) ปวส.   กลุ่มเรียน {sec.get('student_group') or '-'}   ระบบ ({cb(system_type == 'ปกติ')}) ปกติ   ({cb(system_type == 'ทวิภาคี')}) ทวิภาคี",
-            f"สาขาวิชา {sec.get('major_name') or department}   ผู้เรียนทั้งหมด {total_st} คน   เข้าเรียน {present_st} คน   ขาดเรียน {absent_st} คน   รายชื่อผู้ขาด: {sec.get('absent_names') or '-'}",
-        ]
-        for ln in info_lines:
-            p_i = doc.add_paragraph(ln)
-            for rr in p_i.runs:
-                rr.font.name = "TH Sarabun New"
-                rr.font.size = Pt(15)
-
-        topics = [t.strip() for t in (sec.get("topics") or []) if str(t).strip()]
-        p_t_hdr = doc.add_paragraph()
-        rt = p_t_hdr.add_run("1. รายการสอน/หัวข้อเรื่อง")
-        rt.bold = True
-        rt.font.name = "TH Sarabun New"
-        rt.font.size = Pt(15)
-        for ti, top in enumerate(topics or ["-"], start=1):
-            p_top = doc.add_paragraph(f"   {ti}. {top}")
-            for rr in p_top.runs:
-                rr.font.name = "TH Sarabun New"
-                rr.font.size = Pt(15)
-
-        p_tool = doc.add_paragraph(
-            f"2. โปรแกรม/สื่อ/แหล่งเรียนรู้  ({cb('Google Classroom' in tools)}) Google Classroom  "
-            f"({cb('Meet' in tools)}) Meet  ({cb('Zoom' in tools)}) Zoom  "
-            f"({cb('Facebook' in tools)}) Facebook  ({cb('Line' in tools)}) Line  "
-            f"อื่นๆ: {sec.get('other_tool') or '-'}"
+        # Box 2: Metadata & Attendance Table
+        meta_tbl = doc.add_table(rows=3, cols=2)
+        _set_cell_lines(
+            meta_tbl.rows[0].cells[0],
+            [(f"ผู้สอน: {instructor}", False)],
+            font_name=DEFAULT_FONT,
+            size_pt=14.5,
         )
-        for rr in p_tool.runs:
-            rr.font.name = "TH Sarabun New"
-            rr.font.size = Pt(15)
+        _set_cell_lines(
+            meta_tbl.rows[0].cells[1],
+            [(f"แผนกวิชา: {sec.get('department_name') or department}", False)],
+            font_name=DEFAULT_FONT,
+            size_pt=14.5,
+        )
+        _set_cell_lines(
+            meta_tbl.rows[1].cells[0],
+            [(f"ระดับชั้น  {cb(level_type == 'ปวช.')} ปวช.   {cb(level_type == 'ปวส.')} ปวส.", False)],
+            font_name=DEFAULT_FONT,
+            size_pt=14.5,
+        )
+        _set_cell_lines(
+            meta_tbl.rows[1].cells[1],
+            [(f"กลุ่มเรียน {sec.get('student_group') or '-'}   ระบบ {cb(system_type == 'ปกติ')} ปกติ  {cb(system_type == 'ทวิภาคี')} ทวิภาคี", False)],
+            font_name=DEFAULT_FONT,
+            size_pt=14.5,
+        )
+        att_cell = meta_tbl.rows[2].cells[0].merge(meta_tbl.rows[2].cells[1])
+        _set_cell_lines(
+            att_cell,
+            [
+                (
+                    f"สาขาวิชา: {sec.get('major_name') or department}   |   "
+                    f"ผู้เรียนทั้งหมด {total_st} คน   เข้าเรียน {present_st} คน   ขาดเรียน {absent_st} คน   "
+                    f"รายชื่อผู้ขาด: {sec.get('absent_names') or '-'}",
+                    False,
+                )
+            ],
+            font_name=DEFAULT_FONT,
+            size_pt=14.5,
+        )
+        _style_table(meta_tbl, [8.0, 8.0], border_color="475569", header_repeat=False)
 
-        p_assign = doc.add_paragraph(f"3. งานที่มอบหมาย: {sec.get('assignment') or '-'}")
-        for rr in p_assign.runs:
-            rr.font.name = "TH Sarabun New"
-            rr.font.size = Pt(15)
+        # Box 3: Structured Items 1-4 Table
+        topics = [t.strip() for t in (sec.get("topics") or []) if str(t).strip()] or ["-"]
+        outcomes = [str(o).strip() for o in (sec.get("outcomes") or []) if str(o).strip()] or ["-"]
 
-        p_out_hdr = doc.add_paragraph()
-        ro = p_out_hdr.add_run("4. ผลการเรียนรู้ของผู้เรียน")
-        ro.bold = True
-        ro.font.name = "TH Sarabun New"
-        ro.font.size = Pt(15)
-        for oi, outc in enumerate(sec.get("outcomes") or ["-"], start=1):
-            p_o = doc.add_paragraph(f"   {oi}. {outc}")
-            for rr in p_o.runs:
-                rr.font.name = "TH Sarabun New"
-                rr.font.size = Pt(15)
+        body_tbl = doc.add_table(rows=4, cols=2)
+        items_1_to_4: list[tuple[str, list[tuple[str, bool]]]] = [
+            ("1. รายการสอน / หัวข้อเรื่อง", [(f"{ti}. {top}", False) for ti, top in enumerate(topics, start=1)]),
+            (
+                "2. โปรแกรม / สื่อ / แหล่งเรียนรู้",
+                [
+                    (
+                        f"{cb('Google Classroom' in tools)} Google Classroom   "
+                        f"{cb('Meet' in tools)} Meet   "
+                        f"{cb('Zoom' in tools)} Zoom   "
+                        f"{cb('Facebook' in tools)} Facebook   "
+                        f"{cb('Line' in tools)} Line",
+                        False,
+                    ),
+                    (f"อื่นๆ: {sec.get('other_tool') or '-'}", False),
+                ],
+            ),
+            ("3. งานที่มอบหมาย", [(str(sec.get("assignment") or "-"), False)]),
+            ("4. ผลการเรียนรู้ของผู้เรียน", [(f"{oi}. {outc}", False) for oi, outc in enumerate(outcomes, start=1)]),
+        ]
+        for r_idx, (lbl, lines) in enumerate(items_1_to_4):
+            c0, c1 = body_tbl.rows[r_idx].cells[0], body_tbl.rows[r_idx].cells[1]
+            _shade_cell(c0, "F8FAFC")
+            _set_cell_margins(c0, 70, 70, 100, 100)
+            _set_cell_margins(c1, 70, 70, 100, 100)
+            _set_cell_lines(c0, [(lbl, True)], font_name=DEFAULT_FONT, size_pt=14.5)
+            _set_cell_lines(c1, lines, font_name=DEFAULT_FONT, size_pt=14.5)
+        _style_table(body_tbl, [4.5, 11.5], border_color="475569", header_repeat=False)
 
+        # Box 4: 5. Problems & Solutions Table
         p_prob_hdr = doc.add_paragraph()
-        rp = p_prob_hdr.add_run("5. ปัญหาและแนวทางพัฒนาคุณภาพการเรียนรู้ของผู้เรียน")
-        rp.bold = True
-        rp.font.name = "TH Sarabun New"
-        rp.font.size = Pt(15)
-        tbl_p = doc.add_table(rows=2, cols=2)
-        tbl_p.style = "Table Grid"
-        tbl_p.rows[0].cells[0].text = "ปัญหา"
-        tbl_p.rows[0].cells[1].text = "แนวทางพัฒนาคุณภาพการเรียนรู้ของผู้เรียน"
-        tbl_p.rows[1].cells[0].text = sec.get("problems") or "-"
-        tbl_p.rows[1].cells[1].text = sec.get("solutions") or "-"
+        p_prob_hdr.paragraph_format.space_before = Pt(6)
+        p_prob_hdr.paragraph_format.space_after = Pt(2)
+        p_prob_hdr.paragraph_format.keep_with_next = True
+        _apply_run_font(p_prob_hdr.add_run("5. ปัญหาและแนวทางพัฒนาคุณภาพการเรียนรู้ของผู้เรียน"), DEFAULT_FONT, 15.0, bold=True)
 
+        tbl_p = doc.add_table(rows=2, cols=2)
+        _shade_cell(tbl_p.rows[0].cells[0], "F8FAFC")
+        _shade_cell(tbl_p.rows[0].cells[1], "F8FAFC")
+        _set_cell_text(tbl_p.rows[0].cells[0], "ปัญหา / อุปสรรคที่พบ", font_name=DEFAULT_FONT, size_pt=14.5, bold=True)
+        _set_cell_text(tbl_p.rows[0].cells[1], "แนวทางพัฒนาคุณภาพการเรียนรู้ของผู้เรียน", font_name=DEFAULT_FONT, size_pt=14.5, bold=True)
+        _set_cell_text(tbl_p.rows[1].cells[0], str(sec.get("problems") or "-"), font_name=DEFAULT_FONT, size_pt=14.5)
+        _set_cell_text(tbl_p.rows[1].cells[1], str(sec.get("solutions") or "-"), font_name=DEFAULT_FONT, size_pt=14.5)
+        _style_table(tbl_p, [8.0, 8.0], border_color="475569", header_repeat=False)
+
+        # Box 5: 2-Column Photo Evidence Grid
         photo_names = sec.get("photo_filenames") or []
         valid_photos = [ATTACHMENTS_DIR / Path(fn).name for fn in photo_names if (ATTACHMENTS_DIR / Path(fn).name).exists()]
         if valid_photos:
             p_img_hdr = doc.add_paragraph()
-            ri = p_img_hdr.add_run(f"ภาพการสอน ({len(valid_photos)} ภาพ) - {sec.get('course_code') or ''} {sec.get('course_name') or ''}")
-            ri.bold = True
-            ri.font.name = "TH Sarabun New"
-            ri.font.size = Pt(15)
-            img_tbl = doc.add_table(rows=len(valid_photos), cols=1)
-            img_tbl.style = "Table Grid"
+            p_img_hdr.paragraph_format.space_before = Pt(6)
+            p_img_hdr.paragraph_format.space_after = Pt(2)
+            p_img_hdr.paragraph_format.keep_with_next = True
+            _apply_run_font(
+                p_img_hdr.add_run(f"ภาพถ่ายหลักฐานการสอน ({len(valid_photos)} ภาพ) - {sec.get('course_code') or ''} {sec.get('course_name') or ''}"),
+                DEFAULT_FONT,
+                15.0,
+                bold=True,
+            )
+            num_rows = (len(valid_photos) + 1) // 2
+            img_tbl = doc.add_table(rows=num_rows, cols=2)
             for pi, img_path in enumerate(valid_photos):
-                cell_p = img_tbl.rows[pi].cells[0].paragraphs[0]
+                r_idx = pi // 2
+                c_idx = pi % 2
+                cell = img_tbl.rows[r_idx].cells[c_idx]
+                _set_cell_margins(cell, 80, 80, 80, 80)
+                cell_p = cell.paragraphs[0]
                 cell_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 try:
-                    cell_p.add_run().add_picture(str(img_path), width=Cm(11.0))
+                    cell_p.add_run().add_picture(str(img_path), width=Cm(7.2))
                 except Exception:
-                    cell_p.add_run(f"[ไม่สามารถฝังไฟล์ภาพ {img_path.name}]")
+                    _apply_run_font(cell_p.add_run(f"[ไม่สามารถฝังไฟล์ภาพ {img_path.name}]"), DEFAULT_FONT, 13.5)
+                cap_p = cell.add_paragraph()
+                cap_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                cap_p.paragraph_format.space_before = Pt(2)
+                cap_p.paragraph_format.space_after = Pt(0)
+                _apply_run_font(cap_p.add_run(f"ภาพที่ {pi + 1}"), DEFAULT_FONT, 13.5)
+            _style_table(img_tbl, [8.0, 8.0], border_color="64748B", header_repeat=False)
 
     fpath = out_dir / f"{prefix}_รายงานสอนออนไลน์_สัปดาห์{week_no}.docx"
     doc.save(fpath)

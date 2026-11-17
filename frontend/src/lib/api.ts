@@ -78,6 +78,8 @@ export interface BundleRenderResult {
   bundle_files: BundleFileInfo[];
   zip_filename: string;
   zip_url: string;
+  merged_pdf_filename?: string;
+  merged_pdf_url?: string;
   grand_total?: number;
   grand_total_thai_text?: string;
   item_count?: number;
@@ -122,6 +124,17 @@ export interface CourseRecord {
   equipment_json?: Array<{ category: string; item: string; purpose: string }>;
   assessment_json?: Array<{ domain: string; weight: string; method: string; criteria: string }>;
   rubric_json?: Array<{ dimension: string; level4: string; level3: string; level2: string; level1: string }>;
+  equipment?: Array<{ category: string; item: string; purpose: string }>;
+  assessment?: Array<{ domain: string; weight: string; method: string; criteria: string }>;
+  rubric?: Array<{ dimension: string; level4: string; level3: string; level2: string; level1: string }>;
+  morals?: string[];
+  indicators?: string[];
+  evaluation_criteria?: string[];
+  instructional_strategies?: string[];
+  curriculum_analysis?: string;
+  qualification_link?: string;
+  credit_summary?: string;
+  notes?: string[];
   instructor_name: string;
   instructor_phone: string;
   instructor_email?: string;

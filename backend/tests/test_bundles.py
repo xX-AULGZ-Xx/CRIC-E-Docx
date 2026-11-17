@@ -172,40 +172,57 @@ def test_courses_teaching_4_modes_and_photo_upload():
                     "practice_hours": 3,
                 }
             ],
+            "morals": ["มีวินัยและความรับผิดชอบ"],
+            "indicators": ["ผ่านเกณฑ์ร้อยละ 80"],
         },
     )
     assert c_create.status_code == 200
     course = c_create.json()["course"]
     course_id = course["id"]
+    assert course.get("indicators") == ["ผ่านเกณฑ์ร้อยละ 80"]
 
-    # 1. Course syllabus
+    import io, docx as _docx
+
+    # 1. Course syllabus (right margin normalized + custom indicators)
     r1 = client.post(
         "/v1/bundles/teaching/render",
         headers={"X-User-Email": "academic@cric.ac.th"},
         json={"doc_type": "course_syllabus", "convert_pdf": False, "payload": course},
     )
     assert r1.status_code == 200 and len(r1.json()["bundle_files"]) == 1
+    d1 = _docx.Document(io.BytesIO(client.get(r1.json()["bundle_files"][0]["file_url"]).content))
+    assert d1.sections[0].right_margin.cm >= 1.4
+    assert "ผ่านเกณฑ์ร้อยละ 80" in "\n".join(p.text for p in d1.paragraphs)
 
-    # 2. Lesson plan
+    # 2. Lesson plan (true A4 + no stale Cisco networking defaults + structured weekly table + approval block)
     r2 = client.post(
         "/v1/bundles/teaching/render",
         headers={"X-User-Email": "academic@cric.ac.th"},
         json={"doc_type": "lesson_plan", "convert_pdf": False, "payload": course},
     )
     assert r2.status_code == 200 and len(r2.json()["bundle_files"]) == 1
+    d2 = _docx.Document(io.BytesIO(client.get(r2.json()["bundle_files"][0]["file_url"]).content))
+    assert abs(d2.sections[0].page_width.cm - 21.0) < 0.2 and abs(d2.sections[0].page_height.cm - 29.7) < 0.2
+    all_d2_txt = "\n".join(p.text for p in d2.paragraphs) + "\n".join(
+        c.text for t in d2.tables for row in t.rows for c in row.cells
+    )
+    assert "Cisco Packet Tracer" not in all_d2_txt and "RJ-45" not in all_d2_txt
+    assert len(d2.tables) >= 7  # T0..T4 + weekly table + approval block
 
-    # 3. Post-teaching normal (cover memo + 1 subject sheet -> 2 files + zip)
+    # 3. Post-teaching normal (cover memo + 1 subject sheet -> 2 files + merged PDF + zip + checkbox note)
     r3 = client.post(
         "/v1/bundles/teaching/render",
         headers={"X-User-Email": "academic@cric.ac.th"},
         json={
             "doc_type": "post_teaching_normal",
-            "convert_pdf": False,
+            "convert_pdf": True,
             "payload": {
+                "doc_number": "ฝว. 12/2569",
                 "department_name": "แผนกวิชาเทคโนโลยีธุรกิจดิจิทัล",
                 "week_start": 1,
                 "week_end": 4,
                 "instructor_name": "ครูทดสอบ",
+                "dept_head_name": "หัวหน้าแผนกทดสอบ",
                 "subjects": [
                     {
                         "course_code": "21910-9999",
@@ -214,15 +231,21 @@ def test_courses_teaching_4_modes_and_photo_upload():
                         "student_group": "692191001",
                         "total_students": 10,
                         "passed_students": 10,
+                        "assessment_suitable": False,
+                        "assessment_note": "รอปรับเกณฑ์ใบงาน",
                     }
                 ],
             },
         },
     )
     assert r3.status_code == 200 and len(r3.json()["bundle_files"]) == 2
+    assert r3.json()["merged_pdf_url"]
+    assert client.get(r3.json()["merged_pdf_url"]).content[:4] == b"%PDF"
+    d3b = _docx.Document(io.BytesIO(client.get(r3.json()["bundle_files"][1]["file_url"]).content))
+    assert abs(d3b.sections[0].page_width.cm - 21.0) < 0.2
+    assert "รอปรับเกณฑ์ใบงาน" in "\n".join(c.text for t in d3b.tables for r in t.rows for c in r.cells)
 
-    # 4. Upload PNG photo and render Online Teaching Report
-    # Minimal 1x1 valid PNG bytes
+    # 4. Upload PNG photo and render Online Teaching Report (framed tables + 2-col photo grid)
     png_1x1 = (
         b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
         b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xff\xff?\x00\x05\xfe\x02\xfe\xdc\xccY\xe7\x00\x00\x00\x00IEND\xaeB`\x82"
@@ -272,6 +295,28 @@ def test_courses_teaching_4_modes_and_photo_upload():
         },
     )
     assert r4.status_code == 200 and len(r4.json()["bundle_files"]) == 1
+    d4 = _docx.Document(io.BytesIO(client.get(r4.json()["bundle_files"][0]["file_url"]).content))
+    assert len(d4.tables) >= 9  # cover tables + framed online section boxes + photo grid
+    assert len(d4.inline_shapes) >= 1
+
+    # 5. Teaching save -> submit -> approve stamps director PNG signature cleanly
+    dir_sig_up = client.post(
+        "/v1/auth/signature",
+        headers={"X-User-Email": "director@cric.ac.th"},
+        files={"file": ("dirsig.png", png_1x1, "image/png")},
+    )
+    assert dir_sig_up.status_code == 200
+    saved_t = client.post(
+        "/v1/bundles/teaching/save",
+        headers={"X-User-Email": "academic@cric.ac.th"},
+        json={"doc_type": "lesson_plan", "convert_pdf": False, "payload": course},
+    )
+    assert saved_t.status_code == 200
+    tid = saved_t.json()["document"]["id"]
+    assert client.post(f"/v1/bundles/{tid}/submit", headers={"X-User-Email": "academic@cric.ac.th"}, json={"reviewer_email": None, "approver_email": "director@cric.ac.th"}).status_code == 200
+    app_t = client.post(f"/v1/documents/{tid}/approve", headers={"X-User-Email": "director@cric.ac.th"}, json={"comment": "อนุมัติแผน", "stamp_signature": True})
+    assert app_t.status_code == 200
+    assert app_t.json()["document"]["payload_json"]["signatures"].get("director")
 
     # AI draft endpoints offline fallback smoke test
     ai_sp = client.post(
@@ -287,6 +332,14 @@ def test_courses_teaching_4_modes_and_photo_upload():
         json={"mode": "course_plan", "course_code": "21910-9999", "course_name": "ระบบอัตโนมัติ"},
     )
     assert ai_teach.status_code == 200 and len(ai_teach.json()["weekly_plan"]) == 18
+    assert ai_teach.json().get("equipment") and ai_teach.json().get("rubric") and ai_teach.json().get("morals")
+
+    ai_post = client.post(
+        "/v1/ai/draft-teaching",
+        headers={"X-User-Email": "academic@cric.ac.th"},
+        json={"mode": "post_teaching", "course_code": "21910-9999", "course_name": "ระบบอัตโนมัติ"},
+    )
+    assert ai_post.status_code == 200 and ai_post.json().get("weekly_attendance") and ai_post.json().get("evaluation_summary")
 
     # Cleanup course
     del_res = client.delete(f"/v1/courses/{course_id}", headers={"X-User-Email": "academic@cric.ac.th"})

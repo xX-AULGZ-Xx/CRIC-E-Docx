@@ -272,15 +272,17 @@ def _render_to_storage(payload: dict[str, Any], base_name: str, convert_pdf: boo
             "docx_filename": first.get("filename", ""),
             "pdf_filename": Path(first["pdf_url"]).name if first.get("pdf_url") else "",
             "docx_url": first.get("file_url") or bres.get("zip_url", ""),
-            "pdf_url": first.get("pdf_url", ""),
+            "pdf_url": bres.get("merged_pdf_url") or first.get("pdf_url", ""),
             "page_image_urls": first.get("page_image_urls", []),
             "pdf_error": first.get("pdf_error", ""),
-            "font_used": "TH SarabunPSK",
+            "font_used": "TH Sarabun New",
             "issues": [],
             "valid": True,
             "bundle_files": bundle_files,
             "zip_url": bres.get("zip_url", ""),
             "zip_filename": bres.get("zip_filename", ""),
+            "merged_pdf_url": bres.get("merged_pdf_url", ""),
+            "merged_pdf_filename": bres.get("merged_pdf_filename", ""),
         }
 
     docx_path = RENDERED_DIR / f"{base_name}.docx"
@@ -459,6 +461,21 @@ def _apply_signer_stamp_to_payload(payload: dict[str, Any], user: dict[str, Any]
         signer = dict(new_payload.get("signer") or {"name": user["full_name"], "title": user["position_title"]})
         signer["signature_image_path"] = sig_path
         new_payload["signer"] = signer
+    elif doc_type in ("course_syllabus", "lesson_plan", "post_teaching_normal", "post_teaching_online"):
+        sigs = dict(new_payload.get("signatures") or {})
+        role = str(user.get("role") or "")
+        full_name = str(user.get("full_name") or "")
+        if role == "director":
+            sigs["director"] = sig_path
+        elif role == "deputy_director":
+            sigs["deputy_academic"] = sig_path
+        elif full_name and full_name in str(new_payload.get("curriculum_head_name") or ""):
+            sigs["curriculum_head"] = sig_path
+        elif role == "unit_head" or (full_name and full_name in str(new_payload.get("dept_head_name") or "")):
+            sigs["dept_head"] = sig_path
+        else:
+            sigs["dept_head"] = sig_path
+        new_payload["signatures"] = sigs
     return new_payload
 
 
@@ -485,6 +502,8 @@ def approve_document(doc_id: str, body: ApproveRequest, x_user_email: str | None
         payload["bundle_files"] = render_res["bundle_files"]
         payload["zip_url"] = render_res.get("zip_url", "")
         payload["zip_filename"] = render_res.get("zip_filename", "")
+        payload["merged_pdf_url"] = render_res.get("merged_pdf_url", "")
+        payload["merged_pdf_filename"] = render_res.get("merged_pdf_filename", "")
     has_more_steps = len(pending) > 1
     new_status = "pending_approval" if has_more_steps else "approved"
     db.save_document(
@@ -561,6 +580,8 @@ def assign_saraban_number(doc_id: str, body: NumberAllocateDocRequest, x_user_em
         payload["bundle_files"] = render_res["bundle_files"]
         payload["zip_url"] = render_res.get("zip_url", "")
         payload["zip_filename"] = render_res.get("zip_filename", "")
+        payload["merged_pdf_url"] = render_res.get("merged_pdf_url", "")
+        payload["merged_pdf_filename"] = render_res.get("merged_pdf_filename", "")
     db.save_document(
         {
             **doc,

@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS courses (
   equipment_json JSONB DEFAULT '[]'::jsonb,
   assessment_json JSONB DEFAULT '[]'::jsonb,
   rubric_json JSONB DEFAULT '[]'::jsonb,
+  extra_json JSONB DEFAULT '{}'::jsonb,
   instructor_name TEXT DEFAULT '',
   instructor_phone TEXT DEFAULT '',
   instructor_email TEXT NOT NULL,

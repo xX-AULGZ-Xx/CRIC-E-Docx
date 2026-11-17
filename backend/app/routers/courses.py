@@ -34,6 +34,14 @@ class CourseUpsertRequest(BaseModel):
     equipment: list[dict[str, Any]] = []
     assessment: list[dict[str, Any]] = []
     rubric: list[dict[str, Any]] = []
+    morals: list[str] = []
+    indicators: list[str] = []
+    evaluation_criteria: list[str] = []
+    instructional_strategies: list[str] = []
+    curriculum_analysis: str = ""
+    qualification_link: str = ""
+    credit_summary: str = ""
+    notes: list[str] = []
     instructor_name: str = ""
     instructor_phone: str = ""
     instructor_email: str | None = None

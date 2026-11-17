@@ -91,6 +91,7 @@ class Database:
                     conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS division_codes_json JSONB DEFAULT '[]'::jsonb;")
                     conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS units_json JSONB DEFAULT '[]'::jsonb;")
                     conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS head_units_json JSONB DEFAULT '[]'::jsonb;")
+                    conn.execute("ALTER TABLE courses ADD COLUMN IF NOT EXISTS extra_json JSONB DEFAULT '{}'::jsonb;")
                     conn.execute(
                         """
                         CREATE TABLE IF NOT EXISTS courses (
@@ -114,7 +115,8 @@ class Database:
                           equipment_json JSONB DEFAULT '[]'::jsonb,
                           assessment_json JSONB DEFAULT '[]'::jsonb,
                           rubric_json JSONB DEFAULT '[]'::jsonb,
-                          instructor_name TEXT DEFAULT '',
+                          extra_json JSONB DEFAULT '{}'::jsonb,
+                          instructor_name TEXT NOT NULL DEFAULT '',
                           instructor_phone TEXT DEFAULT '',
                           instructor_email TEXT NOT NULL,
                           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -268,6 +270,7 @@ class Database:
                   equipment_json TEXT DEFAULT '[]',
                   assessment_json TEXT DEFAULT '[]',
                   rubric_json TEXT DEFAULT '[]',
+                  extra_json TEXT DEFAULT '{}',
                   instructor_name TEXT DEFAULT '',
                   instructor_phone TEXT DEFAULT '',
                   instructor_email TEXT NOT NULL,
@@ -315,6 +318,7 @@ class Database:
                 "ALTER TABLE users ADD COLUMN division_codes_json TEXT DEFAULT '[]';",
                 "ALTER TABLE users ADD COLUMN units_json TEXT DEFAULT '[]';",
                 "ALTER TABLE users ADD COLUMN head_units_json TEXT DEFAULT '[]';",
+                "ALTER TABLE courses ADD COLUMN extra_json TEXT DEFAULT '{}';",
             ):
                 try:
                     conn.execute(alter_sql)
@@ -381,6 +385,7 @@ class Database:
             "equipment_json",
             "assessment_json",
             "rubric_json",
+            "extra_json",
             "fields_schema_json",
             "division_codes_json",
             "units_json",
@@ -392,6 +397,10 @@ class Database:
                     d[key] = json.loads(d[key])
                 except json.JSONDecodeError:
                     pass
+        if isinstance(d.get("extra_json"), dict):
+            for k, v in d["extra_json"].items():
+                if k not in d or d[k] is None:
+                    d[k] = v
         if "division_codes_json" in d or "division_code" in d:
             raw_divs = d.get("division_codes_json")
             div_list = [str(x).strip() for x in raw_divs if str(x).strip()] if isinstance(raw_divs, list) else []
@@ -1027,6 +1036,26 @@ class Database:
             "equipment_json": json.dumps(data.get("equipment") or data.get("equipment_json") or [], ensure_ascii=False),
             "assessment_json": json.dumps(data.get("assessment") or data.get("assessment_json") or [], ensure_ascii=False),
             "rubric_json": json.dumps(data.get("rubric") or data.get("rubric_json") or [], ensure_ascii=False),
+            "extra_json": json.dumps(
+                {
+                    **(data.get("extra_json") if isinstance(data.get("extra_json"), dict) else {}),
+                    **{
+                        k: data[k]
+                        for k in (
+                            "morals",
+                            "indicators",
+                            "evaluation_criteria",
+                            "instructional_strategies",
+                            "curriculum_analysis",
+                            "qualification_link",
+                            "credit_summary",
+                            "notes",
+                        )
+                        if k in data
+                    },
+                },
+                ensure_ascii=False,
+            ),
             "instructor_name": str(data.get("instructor_name") or ""),
             "instructor_phone": str(data.get("instructor_phone") or ""),
             "instructor_email": str(data.get("instructor_email") or actor_email).strip().lower(),
@@ -1041,7 +1070,7 @@ class Database:
                       course_code={p}, course_name={p}, curriculum_level={p}, credits={p}, semester={p},
                       schedule_text={p}, prerequisite={p}, reference_text={p}, department_name={p}, division_name={p},
                       objectives_json={p}, standards_json={p}, description={p}, knowledge_json={p}, skills_json={p},
-                      weekly_plan_json={p}, equipment_json={p}, assessment_json={p}, rubric_json={p},
+                      weekly_plan_json={p}, equipment_json={p}, assessment_json={p}, rubric_json={p}, extra_json={p},
                       instructor_name={p}, instructor_phone={p}, instructor_email={p}, updated_at={p}
                     WHERE {id_cond}
                     """,
@@ -1052,7 +1081,7 @@ class Database:
                         fields["division_name"], fields["objectives_json"], fields["standards_json"],
                         fields["description"], fields["knowledge_json"], fields["skills_json"],
                         fields["weekly_plan_json"], fields["equipment_json"], fields["assessment_json"],
-                        fields["rubric_json"], fields["instructor_name"], fields["instructor_phone"],
+                        fields["rubric_json"], fields["extra_json"], fields["instructor_name"], fields["instructor_phone"],
                         fields["instructor_email"], now, course_id,
                     ),
                 )
@@ -1063,9 +1092,9 @@ class Database:
                       id, course_code, course_name, curriculum_level, credits, semester,
                       schedule_text, prerequisite, reference_text, department_name, division_name,
                       objectives_json, standards_json, description, knowledge_json, skills_json,
-                      weekly_plan_json, equipment_json, assessment_json, rubric_json,
+                      weekly_plan_json, equipment_json, assessment_json, rubric_json, extra_json,
                       instructor_name, instructor_phone, instructor_email, created_at, updated_at
-                    ) VALUES ({','.join([p] * 25)})
+                    ) VALUES ({','.join([p] * 26)})
                     """,
                     (
                         course_id, fields["course_code"], fields["course_name"], fields["curriculum_level"],
@@ -1074,7 +1103,7 @@ class Database:
                         fields["division_name"], fields["objectives_json"], fields["standards_json"],
                         fields["description"], fields["knowledge_json"], fields["skills_json"],
                         fields["weekly_plan_json"], fields["equipment_json"], fields["assessment_json"],
-                        fields["rubric_json"], fields["instructor_name"], fields["instructor_phone"],
+                        fields["rubric_json"], fields["extra_json"], fields["instructor_name"], fields["instructor_phone"],
                         fields["instructor_email"], now, now,
                     ),
                 )
