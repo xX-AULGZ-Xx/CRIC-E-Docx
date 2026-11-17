@@ -1200,14 +1200,16 @@ def generate_post_teaching_normal(
     _set_a4_section(memo_doc, top_cm=1.5, bottom_cm=1.5, left_cm=3.0, right_cm=2.0)
 
     ps = memo_doc.paragraphs
-    _set_para_text(ps[2], f"ส่วนราชการ  {department}  {division}  {org_name}\t", font_name="TH SarabunIT๙", font_size_pt=16.0)
+    ps[2].text = ""
+    _apply_run_font(ps[2].add_run("ส่วนราชการ  "), "TH SarabunIT๙", 16.0, bold=True)
+    _apply_run_font(ps[2].add_run(f"{department}  {division}  {org_name}\t"), "TH SarabunIT๙", 16.0, bold=False)
     _set_tab_stops(ps[2], [(16.0, WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)])
-    _set_para_text(
-        ps[3],
-        f"ที่ {to_thai_digits(str(doc_no))}\tวันที่ {doc_date}\t",
-        font_name="TH SarabunIT๙",
-        font_size_pt=16.0,
-    )
+
+    ps[3].text = ""
+    _apply_run_font(ps[3].add_run("ที่ "), "TH SarabunIT๙", 16.0, bold=True)
+    _apply_run_font(ps[3].add_run(f"{to_thai_digits(str(doc_no))}\t"), "TH SarabunIT๙", 16.0, bold=False)
+    _apply_run_font(ps[3].add_run("วันที่ "), "TH SarabunIT๙", 16.0, bold=True)
+    _apply_run_font(ps[3].add_run(f"{doc_date}\t"), "TH SarabunIT๙", 16.0, bold=False)
     _set_tab_stops(
         ps[3],
         [

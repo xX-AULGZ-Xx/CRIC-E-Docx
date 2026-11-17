@@ -250,6 +250,8 @@ def test_courses_teaching_4_modes_and_photo_upload():
     assert r3.json()["merged_pdf_url"]
     assert client.get(r3.json()["merged_pdf_url"]).content[:4] == b"%PDF"
     d3a = _docx.Document(io.BytesIO(client.get(r3.json()["bundle_files"][0]["file_url"]).content))
+    assert any(r.bold and "วันที่" in r.text for r in d3a.paragraphs[3].runs)
+    assert d3a.paragraphs[3].runs[-1].bold is False
     d3a_sig_txt = "\n".join(c.text for row in d3a.tables[3].rows for c in row.cells)
     assert "หัวหน้างานพัฒนาหลักสูตรการเรียนการสอน" not in d3a_sig_txt
     assert "ผู้รายงาน" in d3a.tables[3].rows[0].cells[0].text
