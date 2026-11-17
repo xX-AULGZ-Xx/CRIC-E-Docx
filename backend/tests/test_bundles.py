@@ -249,6 +249,12 @@ def test_courses_teaching_4_modes_and_photo_upload():
     assert r3.status_code == 200 and len(r3.json()["bundle_files"]) == 2
     assert r3.json()["merged_pdf_url"]
     assert client.get(r3.json()["merged_pdf_url"]).content[:4] == b"%PDF"
+    d3a = _docx.Document(io.BytesIO(client.get(r3.json()["bundle_files"][0]["file_url"]).content))
+    d3a_sig_txt = "\n".join(c.text for row in d3a.tables[3].rows for c in row.cells)
+    assert "หัวหน้างานพัฒนาหลักสูตรการเรียนการสอน" not in d3a_sig_txt
+    assert "ผู้รายงาน" in d3a.tables[3].rows[0].cells[0].text
+    assert "หัวหน้าแผนกวิชาเทคโนโลยีธุรกิจดิจิทัล" in d3a.tables[3].rows[0].cells[1].text
+    assert "รองผู้อำนวยการ ฝ่ายวิชาการ" in d3a.tables[3].rows[1].cells[0].text
     d3b = _docx.Document(io.BytesIO(client.get(r3.json()["bundle_files"][1]["file_url"]).content))
     assert abs(d3b.sections[0].page_width.cm - 21.0) < 0.2
     assert "รอปรับเกณฑ์ใบงาน" in "\n".join(c.text for t in d3b.tables for r in t.rows for c in r.cells)

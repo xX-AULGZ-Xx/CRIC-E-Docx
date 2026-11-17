@@ -11,7 +11,7 @@ from typing import Any
 
 import docx
 from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT, WD_TAB_LEADER
 from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import nsdecls, qn
 from docx.shared import Cm, Pt
@@ -361,6 +361,14 @@ def _populate_signer_cell(
         _apply_run_font(p_t.add_run(tl), font_name, size_pt)
 
 
+def _set_tab_stops(para: Any, stops: list[tuple[float, WD_TAB_ALIGNMENT, WD_TAB_LEADER]]) -> None:
+    """Replace paragraph tab stops with explicit positions (cm), alignment, and leader."""
+    tab_stops = para.paragraph_format.tab_stops
+    tab_stops.clear_all()
+    for pos_cm, align, leader in stops:
+        tab_stops.add_tab_stop(Cm(pos_cm), align, leader)
+
+
 def _apply_cover_signatures(
     doc: docx.Document,
     payload: dict[str, Any],
@@ -369,6 +377,7 @@ def _apply_cover_signatures(
     division: str,
     instructor: str,
     position: str,
+    include_curriculum_head: bool = True,
 ) -> None:
     sigs = payload.get("signatures") if isinstance(payload.get("signatures"), dict) else {}
     dir_name = (org_profile.get("director") or {}).get("name") or "............................................................"
@@ -406,35 +415,61 @@ def _apply_cover_signatures(
                 c.width = Cm(8.0)
                 _set_cell_margins(c, 50, 50, 40, 40)
 
-        _populate_signer_cell(
-            new_tbl.rows[0].cells[0],
-            instructor,
-            [f"ตำแหน่ง {position}"],
-            sig_path=_resolve_sig_path(sigs.get("instructor")),
-            role_suffix="ผู้รายงาน",
-            size_pt=14.5,
-        )
-        _populate_signer_cell(
-            new_tbl.rows[0].cells[1],
-            dept_head,
-            [f"หัวหน้า{department}"],
-            sig_path=_resolve_sig_path(sigs.get("dept_head")),
-            size_pt=14.5,
-        )
-        _populate_signer_cell(
-            new_tbl.rows[1].cells[0],
-            curr_head,
-            ["หัวหน้างานพัฒนาหลักสูตรการเรียนการสอน"],
-            sig_path=_resolve_sig_path(sigs.get("curriculum_head")),
-            size_pt=14.5,
-        )
-        _populate_signer_cell(
-            new_tbl.rows[1].cells[1],
-            deputy_acad,
-            [f"รองผู้อำนวยการ{division}"],
-            sig_path=_resolve_sig_path(sigs.get("deputy_academic")),
-            size_pt=14.5,
-        )
+        if include_curriculum_head:
+            _populate_signer_cell(
+                new_tbl.rows[0].cells[0],
+                instructor,
+                [f"ตำแหน่ง {position}"],
+                sig_path=_resolve_sig_path(sigs.get("instructor")),
+                role_suffix="ผู้รายงาน",
+                size_pt=14.5,
+            )
+            _populate_signer_cell(
+                new_tbl.rows[0].cells[1],
+                dept_head,
+                [f"หัวหน้า{department}"],
+                sig_path=_resolve_sig_path(sigs.get("dept_head")),
+                size_pt=14.5,
+            )
+            _populate_signer_cell(
+                new_tbl.rows[1].cells[0],
+                curr_head,
+                ["หัวหน้างานพัฒนาหลักสูตรการเรียนการสอน"],
+                sig_path=_resolve_sig_path(sigs.get("curriculum_head")),
+                size_pt=14.5,
+            )
+            _populate_signer_cell(
+                new_tbl.rows[1].cells[1],
+                deputy_acad,
+                [f"รองผู้อำนวยการ{division}"],
+                sig_path=_resolve_sig_path(sigs.get("deputy_academic")),
+                size_pt=14.5,
+            )
+        else:
+            _populate_signer_cell(
+                new_tbl.rows[0].cells[0],
+                instructor,
+                [],
+                sig_path=_resolve_sig_path(sigs.get("instructor")),
+                role_suffix="ผู้รายงาน",
+                size_pt=15.0,
+            )
+            _populate_signer_cell(
+                new_tbl.rows[0].cells[1],
+                dept_head,
+                [f"หัวหน้า{department}"],
+                sig_path=_resolve_sig_path(sigs.get("dept_head")),
+                size_pt=15.0,
+            )
+            merged_deputy = new_tbl.rows[1].cells[0].merge(new_tbl.rows[1].cells[1])
+            merged_deputy.width = Cm(16.0)
+            _populate_signer_cell(
+                merged_deputy,
+                deputy_acad,
+                [f"รองผู้อำนวยการ {division}"],
+                sig_path=_resolve_sig_path(sigs.get("deputy_academic")),
+                size_pt=15.0,
+            )
         old_t3._element.addprevious(new_tbl._element)
         parent = old_t3._element.getparent()
         if parent is not None:
@@ -1166,11 +1201,19 @@ def generate_post_teaching_normal(
 
     ps = memo_doc.paragraphs
     _set_para_text(ps[2], f"ส่วนราชการ  {department}  {division}  {org_name}\t", font_name="TH SarabunIT๙", font_size_pt=16.0)
+    _set_tab_stops(ps[2], [(16.0, WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)])
     _set_para_text(
         ps[3],
         f"ที่ {to_thai_digits(str(doc_no))}\tวันที่ {doc_date}\t",
         font_name="TH SarabunIT๙",
         font_size_pt=16.0,
+    )
+    _set_tab_stops(
+        ps[3],
+        [
+            (8.2, WD_TAB_ALIGNMENT.LEFT, WD_TAB_LEADER.DOTS),
+            (16.0, WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS),
+        ],
     )
     _set_para_text(
         ps[6],
@@ -1183,26 +1226,49 @@ def generate_post_teaching_normal(
     )
 
     if len(memo_doc.tables) > 0:
+        subj_cell = memo_doc.tables[0].rows[0].cells[1]
         _set_cell_text(
-            memo_doc.tables[0].rows[0].cells[1],
-            to_thai_digits(f"รายงานการบันทึกหลังการสอน สัปดาห์ที่ {w_start} ถึง {w_end}  ภาคเรียนที่ {semester}"),
+            subj_cell,
+            to_thai_digits(f"รายงานการบันทึกหลังการสอน สัปดาห์ที่ {w_start} ถึง {w_end}  ภาคเรียนที่ {semester}\t"),
             font_name="TH SarabunIT๙",
             size_pt=16.0,
         )
+        if subj_cell.paragraphs:
+            _set_tab_stops(subj_cell.paragraphs[0], [(14.5, WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)])
     if len(memo_doc.tables) > 1:
         dir_title = (org_profile.get("director") or {}).get("title") or f"ผู้อำนวยการ{org_name}"
         _set_cell_text(memo_doc.tables[1].rows[0].cells[1], dir_title, font_name="TH SarabunIT๙", size_pt=16.0)
     if len(memo_doc.tables) > 2:
         t2 = memo_doc.tables[2]
         _sync_table_rows(t2, max(1, len(subjects)), header_rows=1)
+        for h_idx, h_txt in enumerate(["ลำดับที่", "รหัสวิชา", "ชื่อวิชา"]):
+            h_cell = t2.rows[0].cells[h_idx]
+            _set_cell_text(h_cell, h_txt, font_name="TH SarabunIT๙", size_pt=15.0, bold=True)
+            if h_cell.paragraphs:
+                h_cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
         for idx, sub in enumerate(subjects, start=1):
             row = t2.rows[idx]
             _set_cell_text(row.cells[0], to_thai_digits(str(idx)), font_name="TH SarabunIT๙", size_pt=15.0)
             _set_cell_text(row.cells[1], str(sub.get("course_code") or "-"), font_name="TH SarabunIT๙", size_pt=15.0)
             _set_cell_text(row.cells[2], str(sub.get("course_name") or "-"), font_name="TH SarabunIT๙", size_pt=15.0)
-        _style_table(t2, [2.0, 4.2, 9.8], border_color="475569", header_repeat=True)
+            if row.cells[0].paragraphs:
+                row.cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if row.cells[1].paragraphs:
+                row.cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if row.cells[2].paragraphs:
+                row.cells[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
+        _style_table(t2, [2.0, 4.0, 10.0], border_color="000000", header_repeat=True)
 
-    _apply_cover_signatures(memo_doc, payload, org_profile, department, division, instructor, position)
+    _apply_cover_signatures(
+        memo_doc,
+        payload,
+        org_profile,
+        department,
+        division,
+        instructor,
+        position,
+        include_curriculum_head=False,
+    )
 
     generated_paths: list[Path] = []
     labels: list[tuple[str, str]] = []

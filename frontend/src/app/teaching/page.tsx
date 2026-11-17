@@ -1646,7 +1646,9 @@ export default function TeachingStudioPage() {
                     <input type="text" value={normTitle} onChange={(e) => setNormTitle(e.target.value)} className="ledger-input py-1.5 text-xs" />
                   </div>
                   <SignerComboField label="หัวหน้าแผนกวิชา" value={deptHeadName} onChange={setDeptHeadName} users={users} placeholder="ชื่อหัวหน้าแผนกวิชา" />
-                  <SignerComboField label="หัวหน้างานพัฒนาหลักสูตรฯ" value={curriculumHeadName} onChange={setCurriculumHeadName} users={users} placeholder="ชื่อหัวหน้างานพัฒนาหลักสูตรฯ" />
+                  {tab !== "normal_post" && (
+                    <SignerComboField label="หัวหน้างานพัฒนาหลักสูตรฯ" value={curriculumHeadName} onChange={setCurriculumHeadName} users={users} placeholder="ชื่อหัวหน้างานพัฒนาหลักสูตรฯ" />
+                  )}
                   <SignerComboField label="รองผู้อำนวยการฝ่ายวิชาการ" value={deputyAcademicName} onChange={setDeputyAcademicName} users={users} placeholder="ชื่อรองฯ ฝ่ายวิชาการ" />
                 </div>
 
