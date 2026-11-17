@@ -37,7 +37,6 @@ import {
 import { NotificationBell } from "@/components/NotificationBell";
 import { UserAvatar } from "@/components/UserAvatar";
 import { AppLauncher } from "@/components/launcher/AppLauncher";
-import { confirmAction, toastSuccess } from "@/lib/swal";
 
 const ROLE_LABELS: Record<string, string> = {
   drafter: "ผู้ร่างเอกสาร",
@@ -294,31 +293,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (loggingOut) return;
     setLoggingOut(true);
     try {
-      const res = await api.logout();
-      if (authSource === "sso" && res.sso_logout_url) {
-        const alsoSso = await confirmAction({
-          title: "ออกจากระบบ CRIC E-Docx แล้ว",
-          text: "ต้องการออกจากระบบกลาง CRIC SSO (sso.cric.ac.th) ด้วยหรือไม่?",
-          confirmText: "ออกจากระบบ SSO ด้วย",
-          cancelText: "เฉพาะระบบนี้",
-        });
-        if (alsoSso) {
-          window.location.href = res.sso_logout_url;
-          return;
-        }
-      } else {
-        toastSuccess("ออกจากระบบเรียบร้อยแล้ว");
+      const res = await api.logout().catch(() => null);
+      try {
+        window.localStorage.removeItem("cric_user_email");
+        window.localStorage.removeItem("cric_sso_token");
+      } catch {
+        // ignore storage errors
       }
       if (authDevMode) {
         setActiveUserEmail("guest");
-      } else {
-        setMe(null);
-        setAuthSource("guest");
-        window.location.replace("/login?logout=1");
       }
-    } catch {
       setMe(null);
       setAuthSource("guest");
+
+      if (!authDevMode && isSsoSession && res?.sso_logout_url) {
+        window.location.replace(res.sso_logout_url);
+        return;
+      }
+      window.location.replace("/login?logout=1");
     } finally {
       setLoggingOut(false);
     }

@@ -956,7 +956,7 @@ def get_sso_config(request: Request):
     auth_base = _auth_base_url(cfg)
     sso_realm = str(cfg.get("sso_realm") or SSO_REALM or "cric-college")
     suggested_redirect_uri = _resolve_redirect_uri(request, cfg)
-    post_logout_uri = f"{_external_base_url(request)}/"
+    post_logout_uri = f"{_external_base_url(request)}/login?logout=1"
 
     login_url = None
     if cfg["sso_client_id"]:
@@ -1216,7 +1216,7 @@ async def _build_sso_logout_url(request: Request, cfg: dict[str, Any], id_token_
     end_session = endpoints.get("end_session_endpoint")
     if not end_session:
         return None
-    post_logout = f"{_external_base_url(request)}/"
+    post_logout = f"{_external_base_url(request)}/login?logout=1"
     params: dict[str, str] = {"post_logout_redirect_uri": post_logout}
     if cfg.get("sso_client_id"):
         params["client_id"] = str(cfg["sso_client_id"])

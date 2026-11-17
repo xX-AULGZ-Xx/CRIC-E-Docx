@@ -376,6 +376,7 @@ def test_prod_mode_blocks_header_spoof_and_accepts_panel_jwt_and_logout(monkeypa
         assert logout_res.status_code == 200
         assert logout_res.json()["ok"] is True
         assert "protocol/openid-connect/logout" in logout_res.json()["sso_logout_url"]
+        assert "%2Flogin%3Flogout%3D1" in logout_res.json()["sso_logout_url"]
         set_cookies = logout_res.headers.get_list("set-cookie")
         assert any(auth_router.SESSION_COOKIE_NAME in c for c in set_cookies)
     finally:
