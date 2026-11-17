@@ -464,3 +464,87 @@ def test_avatar_hybrid_sync_upload_serve_preserve_and_delete():
         client.cookies.clear()
     finally:
         _restore_integrations(prev)
+
+
+def test_plan_user_settings_multi_units_head_toggle_and_admin_crud():
+    client.cookies.clear()
+    prev = _with_temp_integrations({"auth_dev_mode": True})
+    admin_headers = {"X-User-Email": "saraban@cric.ac.th"}
+    try:
+        # 1. Verify org_profile includes default division units
+        pub = client.get("/v1/settings/public")
+        assert pub.status_code == 200
+        divs = pub.json()["org_profile"]["divisions"]
+        assert "ฝว." in divs and "แผนกวิชาเทคโนโลยีสารสนเทศ" in divs["ฝว."]["units"]
+
+        # 2. Admin creates a multi-division/multi-unit TEACHER user
+        create_res = client.post(
+            "/v1/auth/users",
+            headers=admin_headers,
+            json={
+                "username": "somchai.teacher",
+                "email": "somchai.teacher@cric.ac.th",
+                "full_name": "นายสมชาย ใจดี",
+                "position_title": "ครูชำนาญการ",
+                "personnel_type": "TEACHER",
+                "division_code": "ฝว.",
+                "division_codes": ["ฝว.", "ฝก."],
+                "unit_name": "แผนกวิชาเทคโนโลยีสารสนเทศ",
+                "units": ["แผนกวิชาเทคโนโลยีสารสนเทศ", "งานกิจกรรมนักเรียน นักศึกษา"],
+                "head_units": [],
+                "role": "drafter",
+                "is_active": True,
+            },
+        )
+        assert create_res.status_code == 200
+        u = create_res.json()["user"]
+        uid = u["id"]
+        assert u["personnel_type"] == "TEACHER"
+        assert u["division_codes"] == ["ฝว.", "ฝก."]
+        assert "แผนกวิชาเทคโนโลยีสารสนเทศ" in u["units"]
+
+        # 3. Self-update toggling head_units promotes drafter -> unit_head automatically
+        teacher_headers = {"X-User-Email": "somchai.teacher@cric.ac.th"}
+        self_head = client.put(
+            "/v1/auth/me",
+            headers=teacher_headers,
+            json={
+                "head_units": ["แผนกวิชาเทคโนโลยีสารสนเทศ"],
+            },
+        )
+        assert self_head.status_code == 200
+        assert self_head.json()["user"]["role"] == "unit_head"
+        assert self_head.json()["user"]["head_units"] == ["แผนกวิชาเทคโนโลยีสารสนเทศ"]
+
+        # 4. Clearing head_units reverts unit_head -> drafter, while non-admin cannot delete users
+        self_clear = client.put(
+            "/v1/auth/me",
+            headers=teacher_headers,
+            json={"head_units": []},
+        )
+        assert self_clear.status_code == 200
+        assert self_clear.json()["user"]["role"] == "drafter"
+        assert client.delete(f"/v1/auth/users/{uid}", headers=teacher_headers).status_code == 403
+
+        # 5. saraban_admin updating own profile preserves saraban_admin role
+        admin_self = client.put("/v1/auth/me", headers=admin_headers, json={"head_units": []})
+        assert admin_self.status_code == 200
+        assert admin_self.json()["user"]["role"] == "saraban_admin"
+
+        # 6. Admin cannot delete self, can update & delete created user
+        me_admin = client.get("/v1/auth/me", headers=admin_headers).json()["user"]
+        assert client.delete(f"/v1/auth/users/{me_admin['id']}", headers=admin_headers).status_code == 400
+
+        upd_res = client.put(
+            f"/v1/auth/users/{uid}",
+            headers=admin_headers,
+            json={"units": ["งานกิจกรรมนักเรียน นักศึกษา"], "unit_name": "งานกิจกรรมนักเรียน นักศึกษา"},
+        )
+        assert upd_res.status_code == 200
+        assert upd_res.json()["user"]["units"] == ["งานกิจกรรมนักเรียน นักศึกษา"]
+
+        del_res = client.delete(f"/v1/auth/users/{uid}", headers=admin_headers)
+        assert del_res.status_code == 200
+        assert db.get_user_by_identifier(uid) is None
+    finally:
+        _restore_integrations(prev)

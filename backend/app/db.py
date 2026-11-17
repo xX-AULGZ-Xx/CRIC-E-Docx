@@ -87,6 +87,10 @@ class Database:
                     conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT '';")
                     conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS default_reviewer_email TEXT DEFAULT '';")
                     conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT DEFAULT '';")
+                    conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS personnel_type TEXT DEFAULT 'STAFF';")
+                    conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS division_codes_json JSONB DEFAULT '[]'::jsonb;")
+                    conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS units_json JSONB DEFAULT '[]'::jsonb;")
+                    conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS head_units_json JSONB DEFAULT '[]'::jsonb;")
                     conn.execute(
                         """
                         CREATE TABLE IF NOT EXISTS courses (
@@ -174,6 +178,10 @@ class Database:
                   unit_name TEXT DEFAULT '',
                   phone TEXT DEFAULT '',
                   default_reviewer_email TEXT DEFAULT '',
+                  personnel_type TEXT DEFAULT 'STAFF',
+                  division_codes_json TEXT DEFAULT '[]',
+                  units_json TEXT DEFAULT '[]',
+                  head_units_json TEXT DEFAULT '[]',
                   role TEXT NOT NULL DEFAULT 'drafter',
                   signature_storage_path TEXT DEFAULT '',
                   avatar_url TEXT DEFAULT '',
@@ -303,6 +311,10 @@ class Database:
                 "ALTER TABLE users ADD COLUMN phone TEXT DEFAULT '';",
                 "ALTER TABLE users ADD COLUMN default_reviewer_email TEXT DEFAULT '';",
                 "ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT '';",
+                "ALTER TABLE users ADD COLUMN personnel_type TEXT DEFAULT 'STAFF';",
+                "ALTER TABLE users ADD COLUMN division_codes_json TEXT DEFAULT '[]';",
+                "ALTER TABLE users ADD COLUMN units_json TEXT DEFAULT '[]';",
+                "ALTER TABLE users ADD COLUMN head_units_json TEXT DEFAULT '[]';",
             ):
                 try:
                     conn.execute(alter_sql)
@@ -370,6 +382,9 @@ class Database:
             "assessment_json",
             "rubric_json",
             "fields_schema_json",
+            "division_codes_json",
+            "units_json",
+            "head_units_json",
         )
         for key in json_cols:
             if key in d and isinstance(d[key], str):
@@ -377,6 +392,33 @@ class Database:
                     d[key] = json.loads(d[key])
                 except json.JSONDecodeError:
                     pass
+        if "division_codes_json" in d or "division_code" in d:
+            raw_divs = d.get("division_codes_json")
+            div_list = [str(x).strip() for x in raw_divs if str(x).strip()] if isinstance(raw_divs, list) else []
+            primary_div = str(d.get("division_code") or "").strip()
+            if not div_list and primary_div:
+                div_list = [primary_div]
+            elif primary_div and primary_div not in div_list:
+                div_list.insert(0, primary_div)
+            d["division_codes"] = div_list
+        if "units_json" in d or "unit_name" in d:
+            raw_units = d.get("units_json")
+            unit_list = [str(x).strip() for x in raw_units if str(x).strip()] if isinstance(raw_units, list) else []
+            primary_unit = str(d.get("unit_name") or "").strip()
+            if not unit_list and primary_unit:
+                unit_list = [primary_unit]
+            elif primary_unit and primary_unit not in unit_list:
+                unit_list.insert(0, primary_unit)
+            d["units"] = unit_list
+        if "head_units_json" in d:
+            raw_heads = d.get("head_units_json")
+            d["head_units"] = [str(x).strip() for x in raw_heads if str(x).strip()] if isinstance(raw_heads, list) else []
+        if "personnel_type" in d:
+            pt = str(d.get("personnel_type") or "").strip().upper()
+            if pt not in ("TEACHER", "STAFF"):
+                pos = str(d.get("position_title") or "")
+                pt = "TEACHER" if pos.startswith("ครู") or pos.startswith("อาจารย์") else "STAFF"
+            d["personnel_type"] = pt
         if "is_circular" in d:
             d["is_circular"] = bool(d["is_circular"])
         if "is_active" in d:
@@ -483,6 +525,31 @@ class Database:
             if "default_reviewer_email" in data and data["default_reviewer_email"] is not None
             else (existing.get("default_reviewer_email", "") if existing else "")
         )
+        raw_div_codes = data.get("division_codes") if "division_codes" in data else (existing.get("division_codes") if existing else None)
+        div_codes_list = [str(x).strip() for x in (raw_div_codes or []) if str(x).strip()]
+        if division_code and division_code not in div_codes_list:
+            div_codes_list.insert(0, division_code)
+        elif not division_code and div_codes_list:
+            division_code = div_codes_list[0]
+
+        raw_units = data.get("units") if "units" in data else (existing.get("units") if existing else None)
+        units_list = [str(x).strip() for x in (raw_units or []) if str(x).strip()]
+        if unit_name and unit_name not in units_list:
+            units_list.insert(0, unit_name)
+        elif not unit_name and units_list:
+            unit_name = units_list[0]
+
+        raw_head_units = data.get("head_units") if "head_units" in data else (existing.get("head_units") if existing else None)
+        head_units_list = [str(x).strip() for x in (raw_head_units or []) if str(x).strip() and str(x).strip() in units_list]
+
+        raw_pt = str(data.get("personnel_type") or (existing.get("personnel_type") if existing else "") or "").strip().upper()
+        if raw_pt not in ("TEACHER", "STAFF"):
+            raw_pt = "TEACHER" if (position_title.startswith("ครู") or position_title.startswith("อาจารย์")) else "STAFF"
+
+        div_codes_str = json.dumps(div_codes_list, ensure_ascii=False)
+        units_str = json.dumps(units_list, ensure_ascii=False)
+        head_units_str = json.dumps(head_units_list, ensure_ascii=False)
+
         role = data.get("role") or (existing["role"] if existing else "drafter")
         incoming_avatar = str(data["avatar_url"]).strip() if "avatar_url" in data and data["avatar_url"] is not None else None
         existing_avatar = str(existing.get("avatar_url") or "").strip() if existing else ""
@@ -513,6 +580,10 @@ class Database:
                       unit_name = {p},
                       phone = {p},
                       default_reviewer_email = {p},
+                      personnel_type = {p},
+                      division_codes_json = {p},
+                      units_json = {p},
+                      head_units_json = {p},
                       role = {p},
                       avatar_url = {p},
                       is_active = {p},
@@ -530,6 +601,10 @@ class Database:
                         unit_name,
                         phone,
                         default_reviewer_email,
+                        raw_pt,
+                        div_codes_str,
+                        units_str,
+                        head_units_str,
                         role,
                         avatar_url,
                         is_active,
@@ -544,9 +619,10 @@ class Database:
                     INSERT INTO users (
                       id, sso_subject, panel_user_id, username, email, full_name,
                       position_title, division_code, unit_name, phone, default_reviewer_email,
+                      personnel_type, division_codes_json, units_json, head_units_json,
                       role, avatar_url, is_active, synced_at
                     )
-                    VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
+                    VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
                     """,
                     (
                         user_id,
@@ -560,6 +636,10 @@ class Database:
                         unit_name,
                         phone,
                         default_reviewer_email,
+                        raw_pt,
+                        div_codes_str,
+                        units_str,
+                        head_units_str,
                         role,
                         avatar_url,
                         is_active,
@@ -570,6 +650,15 @@ class Database:
         res = self.get_user_by_identifier(user_id)
         assert res is not None
         return res
+
+    def delete_user(self, identifier: str) -> dict[str, Any] | None:
+        user = self.get_user_by_identifier(identifier)
+        if not user:
+            return None
+        p = self._ph()
+        with self._conn() as conn:
+            conn.execute(f"DELETE FROM users WHERE id = {p}", (user["id"],))
+        return user
 
     def set_user_signature(self, identifier: str, path: str) -> None:
         user = self.get_user_by_identifier(identifier)

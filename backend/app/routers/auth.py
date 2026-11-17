@@ -629,8 +629,12 @@ class UserCreatePayload(BaseModel):
     email: str | None = None
     full_name: str
     position_title: str = "เจ้าหน้าที่"
+    personnel_type: str = "STAFF"
     division_code: str = ""
+    division_codes: list[str] = []
     unit_name: str = ""
+    units: list[str] = []
+    head_units: list[str] = []
     phone: str = ""
     default_reviewer_email: str = ""
     role: str = "drafter"
@@ -642,8 +646,12 @@ class UserUpdatePayload(BaseModel):
     email: str | None = None
     full_name: str | None = None
     position_title: str | None = None
+    personnel_type: str | None = None
     division_code: str | None = None
+    division_codes: list[str] | None = None
     unit_name: str | None = None
+    units: list[str] | None = None
+    head_units: list[str] | None = None
     phone: str | None = None
     default_reviewer_email: str | None = None
     role: str | None = None
@@ -652,9 +660,14 @@ class UserUpdatePayload(BaseModel):
 
 class ProfileSelfUpdatePayload(BaseModel):
     full_name: str | None = None
+    email: str | None = None
     position_title: str | None = None
+    personnel_type: str | None = None
     division_code: str | None = None
+    division_codes: list[str] | None = None
     unit_name: str | None = None
+    units: list[str] | None = None
+    head_units: list[str] | None = None
     phone: str | None = None
     default_reviewer_email: str | None = None
 
@@ -702,15 +715,42 @@ def update_my_profile(
         if not cleaned_name:
             raise HTTPException(status_code=400, detail="กรุณาระบุชื่อ–นามสกุล")
         updates["full_name"] = cleaned_name
+    if body.email is not None:
+        cleaned_email = body.email.strip().lower()
+        cfg = _effective_auth_cfg()
+        if cleaned_email and cfg["allowed_domain"] and not cleaned_email.endswith(f"@{cfg['allowed_domain']}"):
+            raise HTTPException(status_code=400, detail=f"อีเมลต้องลงท้ายด้วย @{cfg['allowed_domain']}")
+        updates["email"] = cleaned_email or None
     if body.position_title is not None:
         cleaned_title = body.position_title.strip()
         if not cleaned_title:
             raise HTTPException(status_code=400, detail="กรุณาระบุตำแหน่ง")
         updates["position_title"] = cleaned_title
+    if body.personnel_type is not None:
+        pt = body.personnel_type.strip().upper()
+        if pt in ("TEACHER", "STAFF"):
+            updates["personnel_type"] = pt
     if body.division_code is not None:
         updates["division_code"] = body.division_code.strip()
+    if body.division_codes is not None:
+        cleaned_divs = [str(d).strip() for d in body.division_codes if str(d).strip()]
+        updates["division_codes"] = cleaned_divs
+        if "division_code" not in updates or not updates["division_code"]:
+            updates["division_code"] = cleaned_divs[0] if cleaned_divs else ""
     if body.unit_name is not None:
         updates["unit_name"] = body.unit_name.strip()
+    if body.units is not None:
+        cleaned_units = [str(u).strip() for u in body.units if str(u).strip()]
+        updates["units"] = cleaned_units
+        if "unit_name" not in updates or not updates["unit_name"]:
+            updates["unit_name"] = cleaned_units[0] if cleaned_units else ""
+    if body.head_units is not None:
+        target_units = updates.get("units", user.get("units") or [])
+        cleaned_heads = [str(h).strip() for h in body.head_units if str(h).strip() and (not target_units or str(h).strip() in target_units)]
+        updates["head_units"] = cleaned_heads
+        # Mirror plan.cric.ac.th head-of-work role rule while protecting admin/executive roles
+        if user.get("role") in ("drafter", "unit_head"):
+            updates["role"] = "unit_head" if len(cleaned_heads) > 0 else "drafter"
     if body.phone is not None:
         updates["phone"] = body.phone.strip()
     if body.default_reviewer_email is not None:
@@ -765,7 +805,12 @@ def create_user(
     if email and cfg["allowed_domain"] and not email.endswith(f"@{cfg['allowed_domain']}"):
         raise HTTPException(status_code=400, detail=f"อีเมลต้องลงท้ายด้วย @{cfg['allowed_domain']}")
 
-    user = db.upsert_user(body.model_dump())
+    user_payload = body.model_dump()
+    if user_payload.get("division_codes") and not user_payload.get("division_code"):
+        user_payload["division_code"] = user_payload["division_codes"][0]
+    if user_payload.get("units") and not user_payload.get("unit_name"):
+        user_payload["unit_name"] = user_payload["units"][0]
+    user = db.upsert_user(user_payload)
     actor_id = actor.get("email") or actor.get("username") or "admin"
     db.add_audit_log(
         None,
@@ -794,7 +839,19 @@ def update_user(
     if actor["role"] not in ("saraban_admin", "director"):
         raise HTTPException(status_code=403, detail="เฉพาะเจ้าหน้าที่สารบรรณหรือผู้อำนวยการเท่านั้นที่แก้ไขสิทธิ์ผู้ใช้ได้")
 
-    updated = db.update_user_fields(identifier, body.model_dump())
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "division_codes" in updates:
+        divs = [str(x).strip() for x in updates["division_codes"] if str(x).strip()]
+        updates["division_codes"] = divs
+        if "division_code" not in updates or (updates["division_code"] not in divs):
+            updates["division_code"] = divs[0] if divs else ""
+    if "units" in updates:
+        units = [str(x).strip() for x in updates["units"] if str(x).strip()]
+        updates["units"] = units
+        if "unit_name" not in updates or (updates["unit_name"] not in units):
+            updates["unit_name"] = units[0] if units else ""
+
+    updated = db.update_user_fields(identifier, updates)
     if not updated:
         raise HTTPException(status_code=404, detail="ไม่พบผู้ใช้งานที่ระบุ")
 
@@ -803,9 +860,53 @@ def update_user(
         None,
         actor_id,
         "user_updated",
-        {"target": identifier, **{k: v for k, v in body.model_dump().items() if v is not None}},
+        {"target": identifier, **updates},
     )
     return {"user": updated}
+
+
+@router.delete("/users/{identifier}")
+def delete_user(
+    identifier: str,
+    x_user_email: str | None = Header(default=None),
+    x_user_identifier: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+    cric_sso_session: str | None = Cookie(default=None),
+):
+    actor = resolve_current_user(
+        x_user_email=x_user_email,
+        x_user_identifier=x_user_identifier,
+        authorization=authorization,
+        cookie_session=cric_sso_session,
+    )
+    if actor["role"] not in ("saraban_admin", "director"):
+        raise HTTPException(status_code=403, detail="เฉพาะเจ้าหน้าที่สารบรรณหรือผู้อำนวยการเท่านั้นที่ลบผู้ใช้ได้")
+
+    target = db.get_user_by_identifier(identifier)
+    if not target:
+        raise HTTPException(status_code=404, detail="ไม่พบผู้ใช้งานที่ระบุ")
+    if target["id"] == actor["id"]:
+        raise HTTPException(status_code=400, detail="ไม่สามารถลบบัญชีที่กำลังใช้งานอยู่ได้")
+
+    _clear_local_avatar_files(target["id"])
+    sig_raw = (target.get("signature_storage_path") or "").strip()
+    if sig_raw:
+        try:
+            sig_path = Path(sig_raw).resolve()
+            if sig_path.is_relative_to(SIGNATURES_DIR.resolve()) and sig_path.exists():
+                sig_path.unlink()
+        except Exception:
+            pass
+
+    deleted = db.delete_user(target["id"])
+    actor_id = actor.get("email") or actor.get("username") or "admin"
+    db.add_audit_log(
+        None,
+        actor_id,
+        "user_deleted",
+        {"target": target.get("email") or target.get("username") or target["id"]},
+    )
+    return {"ok": True, "deleted": deleted}
 
 
 @router.post("/users/{identifier}/signature")
@@ -1377,11 +1478,18 @@ async def sync_from_panel(
             "email": raw_email or None,
             "full_name": full_name,
             "position_title": position_title,
+            "personnel_type": str(rec.get("personnel_type") or "").strip().upper() or None,
             "division_code": div_code,
+            "division_codes": rec.get("division_codes") if isinstance(rec.get("division_codes"), list) else None,
+            "unit_name": rec.get("unit_name") or rec.get("department_name") or None,
+            "units": rec.get("units") if isinstance(rec.get("units"), list) else None,
+            "head_units": rec.get("head_units") if isinstance(rec.get("head_units"), list) else None,
             "role": mapped_role,
             "avatar_url": _extract_avatar_url(rec, rec, cfg),
             "is_active": bool(rec.get("isActive", rec.get("is_active", True))),
         }
+        # Strip None values so existing fields are preserved by upsert_user
+        user_data = {k: v for k, v in user_data.items() if v is not None}
         synced.append(db.upsert_user(user_data))
 
     actor_id = actor.get("email") or actor.get("username") or "admin"

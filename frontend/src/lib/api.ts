@@ -148,12 +148,18 @@ export interface RenderResult {
 
 export interface UserProfile {
   id: string;
+  sso_subject?: string | null;
+  panel_user_id?: string | null;
   username?: string;
   email: string | null;
   full_name: string;
   position_title: string;
+  personnel_type?: "TEACHER" | "STAFF";
   division_code: string;
+  division_codes?: string[];
   unit_name?: string;
+  units?: string[];
+  head_units?: string[];
   phone?: string;
   default_reviewer_email?: string;
   role: "drafter" | "unit_head" | "deputy_director" | "director" | "saraban_admin";
@@ -313,7 +319,7 @@ export interface OrgProfile {
     supplies_head: string;
     deputy_resource: string;
   };
-  divisions: Record<string, { name: string; deputy_title: string }>;
+  divisions: Record<string, { name: string; deputy_title: string; units?: string[] }>;
 }
 
 export interface AdminSettingsResponse {
@@ -477,9 +483,14 @@ export const api = {
   },
   updateMyProfile: async (body: {
     full_name?: string;
+    email?: string;
     position_title?: string;
+    personnel_type?: "TEACHER" | "STAFF";
     division_code?: string;
+    division_codes?: string[];
     unit_name?: string;
+    units?: string[];
+    head_units?: string[];
     phone?: string;
     default_reviewer_email?: string;
   }) => {
@@ -754,12 +765,43 @@ export const api = {
     email?: string | null;
     full_name: string;
     position_title: string;
+    personnel_type?: "TEACHER" | "STAFF";
     division_code: string;
+    division_codes?: string[];
+    unit_name?: string;
+    units?: string[];
+    head_units?: string[];
+    phone?: string;
+    default_reviewer_email?: string;
     role: string;
     is_active: boolean;
   }) => apiFetch<{ user: UserProfile }>("/v1/auth/users", { method: "POST", body: JSON.stringify(body) }),
-  updateUser: (identifier: string, body: Partial<Pick<UserProfile, "username" | "email" | "full_name" | "position_title" | "division_code" | "role" | "is_active">>) =>
-    apiFetch<{ user: UserProfile }>(`/v1/auth/users/${encodeURIComponent(identifier)}`, { method: "PUT", body: JSON.stringify(body) }),
+  updateUser: (
+    identifier: string,
+    body: Partial<
+      Pick<
+        UserProfile,
+        | "username"
+        | "email"
+        | "full_name"
+        | "position_title"
+        | "personnel_type"
+        | "division_code"
+        | "division_codes"
+        | "unit_name"
+        | "units"
+        | "head_units"
+        | "phone"
+        | "default_reviewer_email"
+        | "role"
+        | "is_active"
+      >
+    >,
+  ) => apiFetch<{ user: UserProfile }>(`/v1/auth/users/${encodeURIComponent(identifier)}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteUser: (identifier: string) =>
+    apiFetch<{ ok: boolean; deleted: UserProfile }>(`/v1/auth/users/${encodeURIComponent(identifier)}`, {
+      method: "DELETE",
+    }),
   adminUploadSignature: (identifier: string, file: File) => {
     const fd = new FormData();
     fd.append("file", file);

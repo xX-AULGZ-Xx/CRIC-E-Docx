@@ -54,8 +54,19 @@ def get_effective_org_profile() -> dict[str, Any]:
     file_defaults = load_defaults()
     saved = db.get_setting_json("org_profile", {})
     merged = {**file_defaults, **saved}
+    default_divs = file_defaults.get("divisions", {})
     if not merged.get("divisions"):
-        merged["divisions"] = file_defaults.get("divisions", {})
+        merged["divisions"] = default_divs
+    else:
+        enriched_divs: dict[str, Any] = {}
+        for code, info in merged["divisions"].items():
+            if isinstance(info, dict):
+                default_units = (default_divs.get(code) or {}).get("units", [])
+                enriched_divs[code] = {
+                    **info,
+                    "units": info["units"] if "units" in info and isinstance(info["units"], list) else list(default_units),
+                }
+        merged["divisions"] = enriched_divs
     if not merged.get("director"):
         merged["director"] = file_defaults.get("director", {})
     default_sp1 = file_defaults.get(
@@ -97,6 +108,7 @@ def get_effective_linter_rules() -> dict[str, Any]:
 class DivisionEntry(BaseModel):
     name: str
     deputy_title: str
+    units: list[str] = []
 
 
 class DirectorInfo(BaseModel):

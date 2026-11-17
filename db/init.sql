@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS users (
   unit_name TEXT DEFAULT '',
   phone TEXT DEFAULT '',
   default_reviewer_email TEXT DEFAULT '',
+  personnel_type TEXT DEFAULT 'STAFF',
+  division_codes_json JSONB DEFAULT '[]'::jsonb,
+  units_json JSONB DEFAULT '[]'::jsonb,
+  head_units_json JSONB DEFAULT '[]'::jsonb,
   role TEXT NOT NULL DEFAULT 'drafter', -- drafter | unit_head | deputy_director | director | saraban_admin
   signature_storage_path TEXT DEFAULT '',
   avatar_url TEXT DEFAULT '',

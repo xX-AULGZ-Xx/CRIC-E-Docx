@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Layers } from "lucide-react";
+import { Layers, X } from "lucide-react";
 import { AdminTemplatesTab } from "@/components/AdminTemplatesTab";
+import { AdminUsersTab } from "@/components/AdminUsersTab";
 import { confirmAction, confirmDanger, toastError, toastSuccess } from "@/lib/swal";
 import {
   Activity,
@@ -16,7 +17,6 @@ import {
   ShieldAlert,
   Sparkles,
   Trash2,
-  Upload,
   Users,
 } from "lucide-react";
 import {
@@ -50,15 +50,11 @@ export default function SettingsPage() {
   const [org, setOrg] = useState<OrgProfile | null>(null);
   const [newDivCode, setNewDivCode] = useState("");
   const [newDivName, setNewDivName] = useState("");
+  const [unitDrafts, setUnitDrafts] = useState<Record<string, string>>({});
 
   // Users
   const [users, setUsers] = useState<UserProfile[]>([]);
-  const [newUsername, setNewUsername] = useState("");
-  const [newUserEmail, setNewUserEmail] = useState("");
-  const [newUserName, setNewUserName] = useState("");
-  const [newUserTitle, setNewUserTitle] = useState("");
-  const [newUserDiv, setNewUserDiv] = useState("ฝบ.");
-  const [newUserRole, setNewUserRole] = useState("drafter");
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
 
   // Integrations & Notifications
   const [ssoIssuer, setSsoIssuer] = useState("https://sso.cric.ac.th/realms/cric-college");
@@ -101,13 +97,15 @@ export default function SettingsPage() {
     setErrMsg("");
     setForbidden(false);
     try {
-      const [adm, usrRes, logRes, diagRes, ssoCfgRes] = await Promise.all([
+      const [adm, usrRes, logRes, diagRes, ssoCfgRes, meRes] = await Promise.all([
         api.getAdminSettings(),
         api.listUsers(),
         api.getAuditLogs(logQuery),
         api.getDiagnostics(),
         api.getSsoConfig().catch(() => null),
+        api.me().catch(() => null),
       ]);
+      if (meRes?.user?.email) setCurrentUserEmail(meRes.user.email);
       setSettings(adm);
       if (ssoCfgRes?.suggested_redirect_uri) setSsoRedirectHint(ssoCfgRes.suggested_redirect_uri);
       if (ssoCfgRes?.suggested_post_logout_uri) setSsoLogoutHint(ssoCfgRes.suggested_post_logout_uri);
@@ -344,76 +342,6 @@ export default function SettingsPage() {
     }
   }
 
-  async function handleCreateUser(e: React.FormEvent) {
-    e.preventDefault();
-    setMsg("");
-    setErrMsg("");
-    try {
-      await api.createUser({
-        username: newUsername.trim() || undefined,
-        email: newUserEmail.trim() || null,
-        full_name: newUserName.trim(),
-        position_title: newUserTitle.trim() || "เจ้าหน้าที่",
-        division_code: newUserDiv.trim(),
-        role: newUserRole,
-        is_active: true,
-      });
-      const createdName = newUserName.trim();
-      setNewUsername("");
-      setNewUserEmail("");
-      setNewUserName("");
-      setNewUserTitle("");
-      setMsg("เพิ่มผู้ใช้งานเรียบร้อยแล้ว");
-      toastSuccess("เพิ่มผู้ใช้งานเรียบร้อยแล้ว", createdName);
-      await loadAll();
-    } catch (err) {
-      const m = err instanceof Error ? err.message : "เพิ่มผู้ใช้ไม่สำเร็จ";
-      setErrMsg(m);
-      toastError("เพิ่มผู้ใช้ไม่สำเร็จ", m);
-    }
-  }
-
-  async function handleUpdateUser(u: UserProfile) {
-    setMsg("");
-    setErrMsg("");
-    const target = u.id || u.username || u.email;
-    if (!target) return;
-    try {
-      await api.updateUser(target, {
-        username: u.username,
-        email: u.email,
-        full_name: u.full_name,
-        position_title: u.position_title,
-        division_code: u.division_code,
-        role: u.role,
-        is_active: u.is_active,
-      });
-      setMsg(`อัปเดตข้อมูลผู้ใช้ ${u.full_name} (${u.username ? `@${u.username}` : (u.email || "")}) เรียบร้อยแล้ว`);
-      toastSuccess("อัปเดตข้อมูลผู้ใช้เรียบร้อย", u.full_name);
-      await loadAll();
-    } catch (err) {
-      const m = err instanceof Error ? err.message : "อัปเดตผู้ใช้ไม่สำเร็จ";
-      setErrMsg(m);
-      toastError("อัปเดตผู้ใช้ไม่สำเร็จ", m);
-    }
-  }
-
-  async function handleAdminSigUpload(targetId: string, file?: File) {
-    if (!file) return;
-    setMsg("");
-    setErrMsg("");
-    try {
-      await api.adminUploadSignature(targetId, file);
-      setMsg("อัปโหลดลายเซ็นให้ผู้ใช้เรียบร้อยแล้ว");
-      toastSuccess("อัปโหลดลายเซ็น PNG สำเร็จ");
-      await loadAll();
-    } catch (err) {
-      const m = err instanceof Error ? err.message : "อัปโหลดลายเซ็นไม่สำเร็จ";
-      setErrMsg(m);
-      toastError("อัปโหลดลายเซ็นไม่สำเร็จ", m);
-    }
-  }
-
   async function handleCleanupPreviews() {
     const ok = await confirmDanger({
       title: "ล้างไฟล์พรีวิวชั่วคราว?",
@@ -636,51 +564,127 @@ export default function SettingsPage() {
             </div>
 
             <div className="border-t border-[#E2E8F0] pt-4">
-              <h3 className="mb-2 text-xs font-bold text-[#0F172A]">รายชื่อฝ่ายงานและรหัสย่อ</h3>
-              <div className="space-y-2">
-                {Object.entries(org.divisions).map(([code, info]) => (
-                  <div key={code} className="grid grid-cols-1 gap-2 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] p-2.5 sm:grid-cols-12">
-                    <div className="sm:col-span-2">
-                      <input type="text" value={code} disabled className="ledger-input bg-slate-100 py-1.5 text-xs font-bold" />
+              <h3 className="mb-2 text-xs font-bold text-[#0F172A]">รายชื่อฝ่ายงาน รหัสย่อ และงาน/แผนกวิชาในสังกัด</h3>
+              <div className="space-y-3">
+                {Object.entries(org.divisions).map(([code, info]) => {
+                  const divUnits = info.units || [];
+                  const draftUnit = unitDrafts[code] || "";
+                  return (
+                    <div key={code} className="space-y-2.5 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] p-3">
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
+                        <div className="sm:col-span-2">
+                          <input type="text" value={code} disabled className="ledger-input bg-slate-100 py-1.5 text-xs font-bold" />
+                        </div>
+                        <div className="sm:col-span-4">
+                          <input
+                            type="text"
+                            value={info.name}
+                            onChange={(e) =>
+                              setOrg({
+                                ...org,
+                                divisions: { ...org.divisions, [code]: { ...info, name: e.target.value } },
+                              })
+                            }
+                            className="ledger-input py-1.5 text-xs"
+                          />
+                        </div>
+                        <div className="sm:col-span-5">
+                          <input
+                            type="text"
+                            value={info.deputy_title}
+                            onChange={(e) =>
+                              setOrg({
+                                ...org,
+                                divisions: { ...org.divisions, [code]: { ...info, deputy_title: e.target.value } },
+                              })
+                            }
+                            className="ledger-input py-1.5 text-xs"
+                          />
+                        </div>
+                        <div className="flex items-center justify-end sm:col-span-1">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteDivision(code, info.name)}
+                            className="rounded p-1.5 text-[#B91C1C] hover:bg-red-50"
+                            title="ลบฝ่ายงาน"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="border-t border-[#E2E8F0] pt-2">
+                        <div className="mb-1.5 text-[11px] font-semibold text-[#475569]">งาน / แผนกวิชา ({divUnits.length})</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {divUnits.map((unitName) => (
+                            <span
+                              key={`${code}-${unitName}`}
+                              className="inline-flex items-center gap-1 rounded border border-[#CBD5E1] bg-white px-2 py-0.5 text-[11px] text-[#334155]"
+                            >
+                              <span>{unitName}</span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setOrg({
+                                    ...org,
+                                    divisions: {
+                                      ...org.divisions,
+                                      [code]: { ...info, units: divUnits.filter((u) => u !== unitName) },
+                                    },
+                                  })
+                                }
+                                className="text-[#94A3B8] hover:text-[#B91C1C]"
+                                title="ลบงานนี้"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                        <div className="mt-2 flex gap-2">
+                          <input
+                            type="text"
+                            placeholder={`เพิ่มงาน/แผนกวิชาใน${info.name}...`}
+                            value={draftUnit}
+                            onChange={(e) => setUnitDrafts((prev) => ({ ...prev, [code]: e.target.value }))}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                const clean = draftUnit.trim();
+                                if (clean && !divUnits.includes(clean)) {
+                                  setOrg({
+                                    ...org,
+                                    divisions: { ...org.divisions, [code]: { ...info, units: [...divUnits, clean] } },
+                                  });
+                                }
+                                setUnitDrafts((prev) => ({ ...prev, [code]: "" }));
+                              }
+                            }}
+                            className="ledger-input flex-1 py-1 text-xs"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const clean = draftUnit.trim();
+                              if (!clean) return;
+                              if (!divUnits.includes(clean)) {
+                                setOrg({
+                                  ...org,
+                                  divisions: { ...org.divisions, [code]: { ...info, units: [...divUnits, clean] } },
+                                });
+                              }
+                              setUnitDrafts((prev) => ({ ...prev, [code]: "" }));
+                            }}
+                            className="inline-flex shrink-0 items-center gap-1 rounded border border-[#CBD5E1] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#0F172A] hover:bg-slate-100"
+                          >
+                            <Plus className="h-3 w-3" />
+                            เพิ่มงาน
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                    <div className="sm:col-span-4">
-                      <input
-                        type="text"
-                        value={info.name}
-                        onChange={(e) =>
-                          setOrg({
-                            ...org,
-                            divisions: { ...org.divisions, [code]: { ...info, name: e.target.value } },
-                          })
-                        }
-                        className="ledger-input py-1.5 text-xs"
-                      />
-                    </div>
-                    <div className="sm:col-span-5">
-                      <input
-                        type="text"
-                        value={info.deputy_title}
-                        onChange={(e) =>
-                          setOrg({
-                            ...org,
-                            divisions: { ...org.divisions, [code]: { ...info, deputy_title: e.target.value } },
-                          })
-                        }
-                        className="ledger-input py-1.5 text-xs"
-                      />
-                    </div>
-                    <div className="flex items-center justify-end sm:col-span-1">
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteDivision(code, info.name)}
-                        className="rounded p-1.5 text-[#B91C1C] hover:bg-red-50"
-                        title="ลบฝ่ายงาน"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -709,6 +713,7 @@ export default function SettingsPage() {
                         [newDivCode.trim()]: {
                           name: newDivName.trim(),
                           deputy_title: `รองผู้อำนวยการ${newDivName.trim()}`,
+                          units: [],
                         },
                       },
                     });
@@ -731,234 +736,17 @@ export default function SettingsPage() {
         </section>
       )}
 
-      {/* TAB 2: Users, RBAC & Signatures */}
+      {/* TAB 2: Users, RBAC & Signatures (plan.cric.ac.th parity) */}
       {tab === "users" && (
-        <section className="ledger-panel overflow-hidden">
-          <div className="ledger-panel-header flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-bold text-[#0F172A]">จัดการผู้ใช้งาน สิทธิ์ (RBAC) และลายเซ็นผู้บริหาร</h2>
-            <button
-              type="button"
-              onClick={async () => {
-                const res = await api.syncPanelUsers();
-                const m = `ซิงค์ข้อมูลจาก panel.cric.ac.th สำเร็จ (${res.synced_count} รายการ)`;
-                setMsg(m);
-                toastSuccess("ซิงค์ผู้ใช้จาก Panel สำเร็จ", `${res.synced_count} รายการ`);
-                await loadAll();
-              }}
-              className="inline-flex items-center gap-1.5 rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800"
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              ซิงค์จาก panel.cric.ac.th
-            </button>
-          </div>
-
-          {/* Mobile (< md) Adaptive User Cards */}
-          <div className="divide-y divide-[#E2E8F0] md:hidden">
-            {users.map((u) => {
-              const targetId = u.id || u.username || u.email || "";
-              const handle = u.username ? `@${u.username}` : (u.email ? `@${u.email.split("@")[0]}` : "@user");
-              return (
-                <div key={targetId} className="space-y-2.5 p-3.5 text-xs">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="font-bold text-[#0F172A]">{u.full_name}</span>
-                      <span className="rounded bg-[#EFF6FF] px-1.5 py-0.5 font-mono text-[11px] text-[#1E3A8A]">{handle}</span>
-                    </div>
-                    <label className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#334155]">
-                      <input
-                        type="checkbox"
-                        checked={u.is_active}
-                        onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, is_active: e.target.checked } : x)))}
-                        className="accent-[#1D4ED8]"
-                      />
-                      ใช้งาน
-                    </label>
-                  </div>
-                  <div className="font-mono text-[10px] text-[#64748B]">
-                    {u.email || <span className="italic">ไม่มีอีเมล (Panel User)</span>}
-                    {(u.unit_name || u.phone) && (
-                      <span className="ml-2 font-sans text-[#475569]">
-                        · {[u.unit_name, u.phone].filter(Boolean).join(" · ")}
-                      </span>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <div>
-                      <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">ชื่อ–นามสกุล</label>
-                      <input
-                        type="text"
-                        value={u.full_name}
-                        onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, full_name: e.target.value } : x)))}
-                        placeholder="ชื่อ–นามสกุล"
-                        className="ledger-input py-1 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">ตำแหน่ง</label>
-                      <input
-                        type="text"
-                        value={u.position_title}
-                        onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, position_title: e.target.value } : x)))}
-                        className="ledger-input py-1 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">ฝ่าย</label>
-                      <input
-                        type="text"
-                        value={u.division_code}
-                        onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, division_code: e.target.value } : x)))}
-                        className="ledger-input py-1 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">บทบาท (Role)</label>
-                      <select
-                        value={u.role}
-                        onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, role: e.target.value as UserProfile["role"] } : x)))}
-                        className="ledger-input py-1 text-xs"
-                      >
-                        <option value="drafter">drafter (ผู้ร่าง)</option>
-                        <option value="unit_head">unit_head (หัวหน้างาน)</option>
-                        <option value="deputy_director">deputy_director (รอง ผอ.)</option>
-                        <option value="director">director (ผอ.)</option>
-                        <option value="saraban_admin">saraban_admin (สารบรรณกลาง)</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                    <label className="inline-flex cursor-pointer items-center gap-1 rounded border border-[#CBD5E1] bg-[#F8FAFC] px-2.5 py-1.5 text-[11px] font-medium hover:bg-slate-100">
-                      <Upload className="h-3 w-3" />
-                      {u.signature_storage_path ? "เปลี่ยน PNG ลายเซ็น" : "อัปโหลด PNG ลายเซ็น"}
-                      <input type="file" accept="image/png,image/jpeg" onChange={(e) => handleAdminSigUpload(targetId, e.target.files?.[0])} className="hidden" />
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => handleUpdateUser(u)}
-                      className="rounded-md bg-[#1D4ED8] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#1E40AF]"
-                    >
-                      บันทึก
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Desktop (>= md) User Table */}
-          <div className="hidden overflow-x-auto md:block">
-            <table className="ledger-table text-xs">
-              <thead>
-                <tr>
-                  <th>ชื่อ–สกุล / Handle / อีเมล</th>
-                  <th>ตำแหน่ง</th>
-                  <th>ฝ่าย</th>
-                  <th>Role</th>
-                  <th className="text-center">ใช้งาน</th>
-                  <th>ลายเซ็น PNG</th>
-                  <th>บันทึก</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((u) => {
-                  const targetId = u.id || u.username || u.email || "";
-                  const handle = u.username ? `@${u.username}` : (u.email ? `@${u.email.split("@")[0]}` : "@user");
-                  return (
-                    <tr key={targetId}>
-                      <td>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="font-semibold text-[#0F172A]">{u.full_name}</span>
-                          <span className="rounded bg-[#EFF6FF] px-1.5 py-0.5 font-mono text-[11px] text-[#1E3A8A]">{handle}</span>
-                        </div>
-                        <div className="mt-0.5 font-mono text-[10px] text-[#64748B]">
-                          {u.email || <span className="italic">ไม่มีอีเมล (Panel User)</span>}
-                        </div>
-                        <input
-                          type="text"
-                          value={u.full_name}
-                          onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, full_name: e.target.value } : x)))}
-                          placeholder="ชื่อ–นามสกุล"
-                          className="ledger-input mt-1 w-44 py-1 text-xs"
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          value={u.position_title}
-                          onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, position_title: e.target.value } : x)))}
-                          className="ledger-input w-44 py-1 text-xs"
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          value={u.division_code}
-                          onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, division_code: e.target.value } : x)))}
-                          className="ledger-input w-14 py-1 text-xs"
-                        />
-                      </td>
-                      <td>
-                        <select
-                          value={u.role}
-                          onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, role: e.target.value as UserProfile["role"] } : x)))}
-                          className="ledger-input py-1 text-xs"
-                        >
-                          <option value="drafter">drafter (ผู้ร่าง)</option>
-                          <option value="unit_head">unit_head (หัวหน้างาน)</option>
-                          <option value="deputy_director">deputy_director (รอง ผอ.)</option>
-                          <option value="director">director (ผอ.)</option>
-                          <option value="saraban_admin">saraban_admin (สารบรรณกลาง)</option>
-                        </select>
-                      </td>
-                      <td className="text-center">
-                        <input
-                          type="checkbox"
-                          checked={u.is_active}
-                          onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, is_active: e.target.checked } : x)))}
-                          className="accent-[#1D4ED8]"
-                        />
-                      </td>
-                      <td>
-                        <label className="inline-flex cursor-pointer items-center gap-1 rounded border border-[#CBD5E1] bg-[#F8FAFC] px-2 py-1 text-[11px] font-medium hover:bg-slate-100">
-                          <Upload className="h-3 w-3" />
-                          {u.signature_storage_path ? "เปลี่ยน PNG" : "อัปโหลด"}
-                          <input type="file" accept="image/png,image/jpeg" onChange={(e) => handleAdminSigUpload(targetId, e.target.files?.[0])} className="hidden" />
-                        </label>
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          onClick={() => handleUpdateUser(u)}
-                          className="rounded-md bg-[#1D4ED8] px-2.5 py-1 text-xs font-semibold text-white hover:bg-[#1E40AF]"
-                        >
-                          บันทึก
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          <form onSubmit={handleCreateUser} className="grid grid-cols-1 gap-2 border-t border-[#E2E8F0] bg-[#F8FAFC] p-4 text-xs sm:grid-cols-2 lg:grid-cols-7">
-            <input type="text" placeholder="Username (เช่น somchai)" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} className="ledger-input py-1.5 font-mono text-xs" />
-            <input type="email" placeholder="อีเมล (เว้นว่างได้)" value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} className="ledger-input py-1.5 text-xs" />
-            <input type="text" required placeholder="ชื่อ–สกุล" value={newUserName} onChange={(e) => setNewUserName(e.target.value)} className="ledger-input py-1.5 text-xs" />
-            <input type="text" required placeholder="ตำแหน่ง" value={newUserTitle} onChange={(e) => setNewUserTitle(e.target.value)} className="ledger-input py-1.5 text-xs" />
-            <input type="text" placeholder="ฝ่าย (ฝบ./ฝว.)" value={newUserDiv} onChange={(e) => setNewUserDiv(e.target.value)} className="ledger-input py-1.5 text-xs" />
-            <select value={newUserRole} onChange={(e) => setNewUserRole(e.target.value)} className="ledger-input py-1.5 text-xs">
-              <option value="drafter">drafter</option>
-              <option value="unit_head">unit_head</option>
-              <option value="deputy_director">deputy_director</option>
-              <option value="director">director</option>
-              <option value="saraban_admin">saraban_admin</option>
-            </select>
-            <button type="submit" className="rounded-md bg-[#0F172A] px-3 py-1.5 font-semibold text-white hover:bg-[#1E293B]">
-              + เพิ่มผู้ใช้
-            </button>
-          </form>
-        </section>
+        <AdminUsersTab
+          users={users}
+          setUsers={setUsers}
+          divisions={org?.divisions || {}}
+          currentUserEmail={currentUserEmail}
+          onReload={loadAll}
+          onMsg={setMsg}
+          onErr={setErrMsg}
+        />
       )}
 
       {/* TAB 3: Integrations & Notifications */}

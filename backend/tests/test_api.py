@@ -282,48 +282,53 @@ def test_admin_settings_rbac_masking_org_linter_and_users():
     assert adm2["integrations"]["sso_client_secret_info"]["masked_preview"] == "••••xyz9"
 
     # 3. Dynamic org_profile update reflected in generated .docx
-    org_upd = client.put(
-        "/v1/settings/org-profile",
-        headers=HEADERS,
-        json={
-            "organization_name": "วิทยาลัยการอาชีพเชียงราย",
-            "address_lines": ["324 หมู่ 13 ต.ท่าสาย", "อ.เมือง จ.เชียงราย 57000"],
-            "doc_number_prefix": "ศธ 0622.05/",
-            "phone_fax": "0 5377 4589",
-            "esaraban_name": "วิทยาลัยการอาชีพเชียงราย",
-            "email": "saraban@cric.ac.th",
-            "director": {"name": "นายทดสอบ ผู้บริหารใหม่", "title": "ผู้อำนวยการวิทยาลัยการอาชีพเชียงราย"},
-            "divisions": {
-                "ฝบ.": {"name": "ฝ่ายบริหารทรัพยากร", "deputy_title": "รองผู้อำนวยการฝ่ายบริหารทรัพยากร"},
-                "ฝพ.": {"name": "ฝ่ายพัฒนาพิเศษ", "deputy_title": "รองผู้อำนวยการฝ่ายพัฒนาพิเศษ"},
+    from app.db import db
+    prev_org = db.get_setting_json("org_profile", {})
+    try:
+        org_upd = client.put(
+            "/v1/settings/org-profile",
+            headers=HEADERS,
+            json={
+                "organization_name": "วิทยาลัยการอาชีพเชียงราย",
+                "address_lines": ["324 หมู่ 13 ต.ท่าสาย", "อ.เมือง จ.เชียงราย 57000"],
+                "doc_number_prefix": "ศธ 0622.05/",
+                "phone_fax": "0 5377 4589",
+                "esaraban_name": "วิทยาลัยการอาชีพเชียงราย",
+                "email": "saraban@cric.ac.th",
+                "director": {"name": "นายทดสอบ ผู้บริหารใหม่", "title": "ผู้อำนวยการวิทยาลัยการอาชีพเชียงราย"},
+                "divisions": {
+                    "ฝบ.": {"name": "ฝ่ายบริหารทรัพยากร", "deputy_title": "รองผู้อำนวยการฝ่ายบริหารทรัพยากร"},
+                    "ฝพ.": {"name": "ฝ่ายพัฒนาพิเศษ", "deputy_title": "รองผู้อำนวยการฝ่ายพัฒนาพิเศษ"},
+                },
             },
-        },
-    )
-    assert org_upd.status_code == 200
-    pub = client.get("/v1/settings/public", headers=drafter_hdr).json()
-    assert "ฝพ." in pub["org_profile"]["divisions"]
+        )
+        assert org_upd.status_code == 200
+        pub = client.get("/v1/settings/public", headers=drafter_hdr).json()
+        assert "ฝพ." in pub["org_profile"]["divisions"]
 
-    # Render an order and verify new director name appears in generated .docx
-    ren = client.post(
-        "/v1/render",
-        headers=HEADERS,
-        json={
-            "convert_pdf": False,
-            "payload": {
-                "type": "order",
-                "order_number": "1/2569",
-                "subject": "ทดสอบผู้ลงนามใหม่",
-                "paragraphs": ["ด้วยวิทยาลัยการอาชีพเชียงราย มีคำสั่งทดสอบ"],
-                "order_date": "2026-11-16",
+        # Render an order and verify new director name appears in generated .docx
+        ren = client.post(
+            "/v1/render",
+            headers=HEADERS,
+            json={
+                "convert_pdf": False,
+                "payload": {
+                    "type": "order",
+                    "order_number": "1/2569",
+                    "subject": "ทดสอบผู้ลงนามใหม่",
+                    "paragraphs": ["ด้วยวิทยาลัยการอาชีพเชียงราย มีคำสั่งทดสอบ"],
+                    "order_date": "2026-11-16",
+                },
             },
-        },
-    )
-    assert ren.status_code == 200
-    docx_bytes = client.get(ren.json()["docx_url"]).content
-    import io, docx as _docx
-    d_obj = _docx.Document(io.BytesIO(docx_bytes))
-    full_txt = "\n".join(p.text for p in d_obj.paragraphs)
-    assert "นายทดสอบ ผู้บริหารใหม่" in full_txt
+        )
+        assert ren.status_code == 200
+        docx_bytes = client.get(ren.json()["docx_url"]).content
+        import io, docx as _docx
+        d_obj = _docx.Document(io.BytesIO(docx_bytes))
+        full_txt = "\n".join(p.text for p in d_obj.paragraphs)
+        assert "นายทดสอบ ผู้บริหารใหม่" in full_txt
+    finally:
+        db.set_setting("org_profile", prev_org, "test-restore")
 
     # 4. Custom Linter Rules
     l_upd = client.put(
