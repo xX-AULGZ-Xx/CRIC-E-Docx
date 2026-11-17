@@ -28,13 +28,24 @@ _THAI_TOKEN_RE = re.compile(r"([☑☐✓])")
 
 
 def _apply_run_font(run: Any, font_name: str = DEFAULT_FONT, size_pt: float | None = 16.0, bold: bool | None = None) -> None:
+    rpr = run._element.get_or_add_rPr()
     if bold is not None:
         run.bold = bold
+        for old_b in rpr.findall(qn("w:bCs")):
+            rpr.remove(old_b)
+        if bold:
+            rpr.append(OxmlElement("w:bCs"))
     if font_name:
         run.font.name = font_name
     if size_pt:
         run.font.size = Pt(size_pt)
-    rpr = run._element.get_or_add_rPr()
+        half_pt = str(int(round(size_pt * 2)))
+        for tag in ("w:sz", "w:szCs"):
+            for old_s in rpr.findall(qn(tag)):
+                rpr.remove(old_s)
+            el = OxmlElement(tag)
+            el.set(qn("w:val"), half_pt)
+            rpr.append(el)
     rfonts = rpr.find(qn("w:rFonts"))
     if rfonts is None:
         rfonts = OxmlElement("w:rFonts")
@@ -68,6 +79,10 @@ def _set_para_text(
     font_size_pt: float | None = None,
     bold: bool | None = None,
 ) -> None:
+    # Remove non-run wrappers (e.g., <w:hyperlink>, <w:proofErr>) so stale template fragments never linger
+    for child in list(para._element):
+        if child.tag not in (qn("w:pPr"), qn("w:r")):
+            para._element.remove(child)
     if not para.runs:
         r = para.add_run(text)
         _apply_run_font(r, font_name or DEFAULT_FONT, font_size_pt, bold=bold)
@@ -426,7 +441,13 @@ def _apply_cover_signatures(
             parent.remove(old_t3._element)
 
 
-def _append_lesson_approval_block(doc: docx.Document, payload: dict[str, Any], org_profile: dict[str, Any]) -> None:
+def _append_lesson_approval_block(
+    doc: docx.Document,
+    payload: dict[str, Any],
+    org_profile: dict[str, Any],
+    heading: str = "การตรวจสอบและอนุมัติแผนการจัดการเรียนรู้",
+    preparer_label: str = "ผู้จัดทำแผนการจัดการเรียนรู้",
+) -> None:
     sigs = payload.get("signatures") if isinstance(payload.get("signatures"), dict) else {}
     instructor = payload.get("instructor_name") or "ครูผู้สอน"
     position = payload.get("instructor_title") or "ครู"
@@ -442,7 +463,7 @@ def _append_lesson_approval_block(doc: docx.Document, payload: dict[str, Any], o
     p_hdr.paragraph_format.space_before = Pt(14)
     p_hdr.paragraph_format.space_after = Pt(6)
     p_hdr.paragraph_format.keep_with_next = True
-    _apply_run_font(p_hdr.add_run("การตรวจสอบและอนุมัติแผนการจัดการเรียนรู้"), DEFAULT_FONT, 16.0, bold=True)
+    _apply_run_font(p_hdr.add_run(heading), DEFAULT_FONT, 16.0, bold=True)
 
     tbl = doc.add_table(rows=3, cols=2)
     _clear_table_borders(tbl)
@@ -456,7 +477,7 @@ def _append_lesson_approval_block(doc: docx.Document, payload: dict[str, Any], o
     _populate_signer_cell(
         tbl.rows[0].cells[0],
         instructor,
-        [f"ตำแหน่ง {position} ({department})", "ผู้จัดทำแผนการจัดการเรียนรู้"],
+        [f"ตำแหน่ง {position} ({department})", preparer_label],
         sig_path=_resolve_sig_path(sigs.get("instructor")),
         font_name=DEFAULT_FONT,
         size_pt=15.0,
@@ -624,6 +645,18 @@ def _plist(payload: dict[str, Any], key: str) -> list[Any]:
     return list(val_json) if val_json else []
 
 
+def _set_kv_cell(cell: Any, label: str, val: str, size_pt: float = 15.5) -> None:
+    """Write 'Label value' cleanly into a metadata grid cell with bold label."""
+    for p in list(cell.paragraphs)[1:]:
+        _remove_para(p)
+    p = cell.paragraphs[0]
+    p.text = ""
+    p.paragraph_format.space_before = Pt(1)
+    p.paragraph_format.space_after = Pt(1)
+    _apply_run_font(p.add_run(f"{label} "), DEFAULT_FONT, size_pt, bold=True)
+    _apply_run_font(p.add_run(str(val or "-")), DEFAULT_FONT, size_pt, bold=False)
+
+
 # ---------------------------------------------------------------------------
 # 1. กำหนดการสอน (Course Syllabus)
 # ---------------------------------------------------------------------------
@@ -636,7 +669,7 @@ def generate_course_syllabus(
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     doc = docx.Document(resolve_system_template("teaching/1_course_syllabus.docx"))
-    _set_a4_section(doc, top_cm=1.5, bottom_cm=1.5, left_cm=1.5, right_cm=1.5)
+    _set_a4_section(doc, top_cm=1.5, bottom_cm=1.5, left_cm=1.5, right_cm=1.5)  # 18.0 cm printable width
 
     code = payload.get("course_code") or "-"
     name = payload.get("course_name") or "-"
@@ -652,20 +685,69 @@ def generate_course_syllabus(
     ref = payload.get("reference_text") or "Internet หัวข้อที่เกี่ยวข้อง"
 
     ps = doc.paragraphs
+    ppr2 = ps[2]._element.pPr
+    if ppr2 is not None:
+        for old_ind in ppr2.findall(qn("w:ind")):
+            ppr2.remove(old_ind)
     _set_para_text(ps[2], "กำหนดการสอน (Course Syllabus)", font_name=DEFAULT_FONT, font_size_pt=18.0, bold=True)
-    _set_para_text(ps[3], f"รหัสวิชา : {code}\t\t\tชื่อวิชา : {name}", font_name=DEFAULT_FONT, font_size_pt=16.0)
-    _set_para_text(ps[4], f"จำนวน : {total_credits}\t\t\tหลักสูตรการศึกษา (Course status) : {level}", font_name=DEFAULT_FONT, font_size_pt=16.0)
-    _set_para_text(ps[5], f"ความรู้พื้นฐาน (Pre-requisite) : {prereq}", font_name=DEFAULT_FONT, font_size_pt=16.0)
-    _set_para_text(ps[6], f"ภาคเรียนที่ (Semester) : {semester}\t\tวัน-เวลาที่เรียน : {schedule}", font_name=DEFAULT_FONT, font_size_pt=16.0)
-    _set_para_text(ps[7], f"ชื่อผู้สอน (Instructor) : {instructor}\t\tโทรศัพท์ (Phone) : {phone}", font_name=DEFAULT_FONT, font_size_pt=16.0)
-    _set_para_text(ps[8], f"อีเมล์ (E-Mail) : {email}", font_name=DEFAULT_FONT, font_size_pt=16.0)
-    _set_para_text(ps[9], f"แหล่งค้นคว้าเพิ่มเติม (Reference) : {ref}", font_name=DEFAULT_FONT, font_size_pt=16.0)
+    ps[2].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    ps[2].paragraph_format.space_after = Pt(6)
 
+    # Replace P03..P09 tab-misaligned lines cleanly with a borderless 2-column metadata grid (9.0 + 9.0 = 18.0 cm)
+    meta_tbl = doc.add_table(rows=6, cols=2)
+    _clear_table_borders(meta_tbl)
+    meta_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+    old_grid = meta_tbl._tbl.find(qn("w:tblGrid"))
+    if old_grid is not None:
+        meta_tbl._tbl.remove(old_grid)
+    new_grid = OxmlElement("w:tblGrid")
+    for w_cm in (9.0, 9.0):
+        gc = OxmlElement("w:gridCol")
+        gc.set(qn("w:w"), str(int(w_cm * 567)))
+        new_grid.append(gc)
+    meta_tbl._tbl.insert(1, new_grid)
+
+    meta_pairs = [
+        (("รหัสวิชา :", code), ("ชื่อวิชา :", name)),
+        (("จำนวน :", total_credits), ("หลักสูตรการศึกษา :", level)),
+        (("ภาคเรียนที่ :", semester), ("วัน-เวลาที่เรียน :", schedule)),
+        (("ชื่อผู้สอน :", instructor), ("โทรศัพท์ (Phone) :", phone)),
+        (("ความรู้พื้นฐาน :", prereq), ("อีเมล (E-Mail) :", email)),
+    ]
+    for r_idx, ((l1, v1), (l2, v2)) in enumerate(meta_pairs):
+        _set_row_cant_split(meta_tbl.rows[r_idx])
+        for c_idx, (lbl, val) in enumerate(((l1, v1), (l2, v2))):
+            cell = meta_tbl.rows[r_idx].cells[c_idx]
+            cell.width = Cm(9.0)
+            _set_cell_margins(cell, 25, 25, 40, 40)
+            _set_kv_cell(cell, lbl, val)
+
+    ref_cell = meta_tbl.rows[5].cells[0].merge(meta_tbl.rows[5].cells[1])
+    _set_row_cant_split(meta_tbl.rows[5])
+    ref_cell.width = Cm(18.0)
+    _set_cell_margins(ref_cell, 25, 45, 40, 40)
+    _set_kv_cell(ref_cell, "แหล่งค้นคว้าเพิ่มเติม (Reference) :", ref)
+
+    ps[3]._element.addprevious(meta_tbl._element)
+    for p_old in ps[3:10]:
+        _remove_para(p_old)
+
+    # Rewrite every content section strictly inside non-overlapping heading boundaries
     _rewrite_list_section(doc, "จุดประสงค์รายวิชา", "มาตรฐานรายวิชา", _plist(payload, "objectives"))
     _rewrite_list_section(doc, "มาตรฐานรายวิชา", "คำอธิบายรายวิชา", _plist(payload, "standards"))
     _rewrite_list_section(doc, "คำอธิบายรายวิชา", "ความรู้", [payload.get("description") or "-"], numbered=False)
-    _rewrite_list_section(doc, "ความรู้", "ทักษะ", _plist(payload, "knowledge"))
-    _rewrite_list_section(doc, "ทักษะ", "คุณธรรม", _plist(payload, "skills"))
+    _rewrite_list_section(
+        doc,
+        "ความรู้",
+        "ทักษะ",
+        _plist(payload, "knowledge") or [f"หลักการ ทฤษฎี และโครงสร้างองค์ประกอบพื้นฐานของรายวิชา {name}"],
+    )
+    _rewrite_list_section(
+        doc,
+        "ทักษะ",
+        "คุณธรรม",
+        _plist(payload, "skills") or [f"ปฏิบัติงานในรายวิชา {name} ตามขั้นตอนและมาตรฐานความปลอดภัยได้อย่างถูกต้อง"],
+    )
 
     morals = _plist(payload, "morals") or [
         "ความมีวินัย ตรงต่อเวลา และปฏิบัติงานตามกฎความปลอดภัยในห้องปฏิบัติการอย่างเคร่งครัด",
@@ -673,19 +755,38 @@ def generate_course_syllabus(
     ]
     _rewrite_list_section(doc, "คุณธรรม", "ตัวชี้วัด", morals)
 
-    indicators = _plist(payload, "indicators")
-    if indicators:
-        _rewrite_list_section(doc, "ตัวชี้วัด", "วิธีการสอน", indicators)
+    indicators = _plist(payload, "indicators") or [
+        f"ผู้เรียนสามารถอธิบายหลักการและนำทักษะวิชา {name} ไปประยุกต์ใช้ในการปฏิบัติงานได้",
+        "ผู้เรียนมีเวลาเรียนไม่น้อยกว่าร้อยละ 80 และส่งภาระงานครบถ้วนตามกำหนด",
+        "ผู้เรียนผ่านเกณฑ์การประเมินผลสัมฤทธิ์รายวิชาตามเกณฑ์มาตรฐานของวิทยาลัย",
+    ]
+    _rewrite_list_section(doc, "ตัวชี้วัด", "เกณฑ์การให้คะแนน", indicators)
+
+    assessment_rows = _plist(payload, "assessment")
+    mark_lines = _plist(payload, "evaluation_criteria") or (
+        [f"{a.get('domain', '')} ({a.get('method', '')})  สัดส่วน {a.get('weight', '')}".strip() for a in assessment_rows]
+        if assessment_rows
+        else [
+            "ด้านคุณธรรม จริยธรรม และจิตพิสัย (เวลาเรียน วินัย ความรับผิดชอบ)  20%",
+            "ด้านทักษะปฏิบัติการและภาระงาน (ใบงาน ชิ้นงาน แบบฝึกหัด)  40%",
+            "การประเมินผลสัมฤทธิ์กลางภาคเรียน (ทฤษฎีและปฏิบัติ)  20%",
+            "การประเมินผลสัมฤทธิ์ปลายภาคเรียน (ทฤษฎีและปฏิบัติ)  20%",
+        ]
+    )
+    _rewrite_list_section(doc, "เกณฑ์การให้คะแนน", "วิธีการสอน", mark_lines)
 
     strategies = _plist(payload, "instructional_strategies") or [
-        "การจัดการเรียนการสอนเชิงรุก (Active Learning) เน้นการลงมือปฏิบัติจริงตามสมรรถนะอาชีพ",
-        "บูรณาการการแก้ปัญหาและการทำงานร่วมกันเป็นทีมควบคู่กับคุณธรรมจริยธรรมวิชาชีพ",
+        f"การจัดการเรียนการสอนเชิงรุก (Active Learning) สำหรับรายวิชา {name} เน้นให้ผู้เรียนคิดวิเคราะห์และลงมือปฏิบัติจริง",
+        "บูรณาการการเรียนรู้แบบใช้ปัญหาเป็นฐาน (Problem-Based Learning) ควบคู่การทำงานเป็นทีม",
+        "สาธิต ฝึกปฏิบัติตามใบงานจริง ประเมินผลตามสภาพจริง และทบทวนเสริมทักษะรายบุคคล",
     ]
     _rewrite_list_section(doc, "วิธีการสอน", "เกณฑ์การประเมินผล", strategies, numbered=False)
 
-    eval_criteria = _plist(payload, "evaluation_criteria")
-    if eval_criteria:
-        _rewrite_list_section(doc, "เกณฑ์การประเมินผล", "รายละเอียดกำหนดการสอน", eval_criteria, numbered=False)
+    work_assign = _plist(payload, "work_assignments") or [
+        str(payload.get("work_assignments_text") or "").strip()
+        or f"ผู้สอนมอบหมายให้ผู้เรียนศึกษาค้นคว้าเพิ่มเติมจากเอกสารประกอบการสอนและแหล่งเรียนรู้ที่เกี่ยวข้อง พร้อมจัดทำใบงานวิชา {name} เพื่อประเมินความก้าวหน้าอย่างสม่ำเสมอ"
+    ]
+    _rewrite_list_section(doc, "การมอบหมายงานให้นักศึกษาค้นคว้า", "รายละเอียดกำหนดการสอน", work_assign, numbered=False)
 
     weeks = _plist(payload, "weekly_plan")
     total_hours = payload.get("total_hours") or sum(
@@ -701,6 +802,9 @@ def generate_course_syllabus(
                 font_size_pt=16.0,
                 bold=True,
             )
+            p.paragraph_format.space_before = Pt(10)
+            p.paragraph_format.space_after = Pt(4)
+            p.paragraph_format.keep_with_next = True
             break
 
     notes = payload.get("notes") or ["รายละเอียดการสอนปรับยืดหยุ่นได้ตามศักยภาพผู้เรียนและปฏิทินปฏิบัติการของวิทยาลัย"]
@@ -709,33 +813,89 @@ def generate_course_syllabus(
         for p in doc.paragraphs[p_notes_idx + 1 :]:
             _remove_para(p)
         for line in notes:
-            p_new = doc.add_paragraph(f"\t{line}")
+            p_new = doc.add_paragraph(str(line).strip())
+            p_new.paragraph_format.left_indent = Cm(0.6)
+            p_new.paragraph_format.space_before = Pt(1)
+            p_new.paragraph_format.space_after = Pt(2)
             for r in p_new.runs:
                 _apply_run_font(r, DEFAULT_FONT, 15.5)
 
-    # Fit Table 0 cleanly to 18.0 cm printable width
-    if len(doc.tables) > 0:
-        _style_table(doc.tables[0], [2.4, 2.0, 4.3, 0.6, 2.4, 2.0, 4.3], border_color="94A3B8", header_repeat=True)
+    # Normalize heading typography across the entire document to unified TH Sarabun New Bold 16pt
+    section_headings = (
+        "จุดประสงค์รายวิชา",
+        "มาตรฐานรายวิชา",
+        "คำอธิบายรายวิชา",
+        "ความรู้ นักศึกษามีความรู้",
+        "ทักษะ",
+        "คุณธรรม",
+        "ตัวชี้วัด",
+        "เกณฑ์การให้คะแนน",
+        "วิธีการสอน",
+        "เกณฑ์การประเมินผล",
+        "การมอบหมายงาน",
+        "หมายเหตุ",
+    )
+    for p in doc.paragraphs:
+        txt = p.text.strip()
+        if any(txt.startswith(h) for h in section_headings):
+            _set_para_text(p, txt, font_name=DEFAULT_FONT, font_size_pt=16.0, bold=True)
+            p.paragraph_format.space_before = Pt(8)
+            p.paragraph_format.space_after = Pt(2)
+            p.paragraph_format.keep_with_next = True
 
-    # Populate Table 1: 18-week schedule
+    # Note: meta_tbl inserted at doc.tables[0]; template Grade table is now doc.tables[1], Schedule table is doc.tables[2]
     if len(doc.tables) > 1:
-        t1 = doc.tables[1]
+        grade_tbl = doc.tables[1]
+        _style_table(grade_tbl, [2.1, 2.3, 4.3, 0.6, 2.1, 2.3, 4.3], border_color="64748B", header_repeat=True)
+        for ri, row in enumerate(grade_tbl.rows):
+            for ci, cell in enumerate(row.cells):
+                _set_cell_margins(cell, 45, 45, 60, 60)
+                if ci == 3:
+                    _set_cell_text(cell, "", font_name=DEFAULT_FONT, size_pt=14.0)
+                    continue
+                txt = cell.text.strip().replace("ระดับผลการ เรียน", "ระดับผลการเรียน")
+                align = WD_ALIGN_PARAGRAPH.CENTER if (ri == 0 or ci in (0, 1, 4, 5)) else WD_ALIGN_PARAGRAPH.LEFT
+                if ri == 0:
+                    _shade_cell(cell, "F1F5F9")
+                _set_cell_text(cell, txt, font_name=DEFAULT_FONT, size_pt=14.5, bold=(ri == 0))
+                cell.paragraphs[0].alignment = align
+
+    if len(doc.tables) > 2:
+        t1 = doc.tables[2]
         _sync_table_rows(t1, max(1, len(weeks)), header_rows=1)
+        for ci, cell in enumerate(t1.rows[0].cells):
+            _shade_cell(cell, "E2E8F0")
+            _set_cell_margins(cell, 60, 60, 70, 70)
+            _set_cell_text(cell, cell.text.strip(), font_name=DEFAULT_FONT, size_pt=14.5, bold=True)
+            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
         for idx, wk in enumerate(weeks, start=1):
             row = t1.rows[idx]
-            _set_cell_text(row.cells[0], str(wk.get("week") or idx), font_name=DEFAULT_FONT, size_pt=14.0)
-            _set_cell_text(row.cells[1], str(wk.get("topic") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
-            _set_cell_text(row.cells[2], str(wk.get("activities") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
-            _set_cell_text(row.cells[3], str(wk.get("media") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
-            _set_cell_text(row.cells[4], str(wk.get("evaluation") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
-            _set_cell_text(row.cells[5], str(wk.get("competency") or ""), font_name=DEFAULT_FONT, size_pt=14.0)
+            vals = [
+                str(wk.get("week") or idx),
+                str(wk.get("topic") or ""),
+                str(wk.get("activities") or ""),
+                str(wk.get("media") or ""),
+                str(wk.get("evaluation") or ""),
+                str(wk.get("competency") or ""),
+            ]
+            for ci, val in enumerate(vals):
+                _set_cell_margins(row.cells[ci], 55, 55, 70, 70)
+                _set_cell_text(row.cells[ci], val, font_name=DEFAULT_FONT, size_pt=14.0)
+                if ci == 0:
+                    row.cells[ci].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
         if not weeks:
             for c in range(6):
                 _set_cell_text(t1.rows[1].cells[c], "-", font_name=DEFAULT_FONT, size_pt=14.0)
-        _style_table(t1, [1.3, 3.7, 4.2, 2.8, 3.0, 3.0], border_color="475569", header_repeat=True)
+        _style_table(t1, [1.2, 3.6, 4.4, 2.8, 3.0, 3.0], border_color="475569", header_repeat=True)
 
     if payload.get("include_approval_block", True):
-        _append_lesson_approval_block(doc, payload, org_profile)
+        _append_lesson_approval_block(
+            doc,
+            payload,
+            org_profile,
+            heading="การตรวจสอบและอนุมัติกำหนดการสอน",
+            preparer_label="ผู้จัดทำกำหนดการสอน",
+        )
 
     fname = f"{prefix}_กำหนดการสอน_{code}.docx".replace("/", "-")
     fpath = out_dir / fname

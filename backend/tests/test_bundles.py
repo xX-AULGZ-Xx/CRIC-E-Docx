@@ -183,7 +183,7 @@ def test_courses_teaching_4_modes_and_photo_upload():
 
     import io, docx as _docx
 
-    # 1. Course syllabus (right margin normalized + custom indicators)
+    # 1. Course syllabus (2-col metadata table, non-colliding middle sections, zero networking leftovers, 4-pos approval block)
     r1 = client.post(
         "/v1/bundles/teaching/render",
         headers={"X-User-Email": "academic@cric.ac.th"},
@@ -192,7 +192,15 @@ def test_courses_teaching_4_modes_and_photo_upload():
     assert r1.status_code == 200 and len(r1.json()["bundle_files"]) == 1
     d1 = _docx.Document(io.BytesIO(client.get(r1.json()["bundle_files"][0]["file_url"]).content))
     assert d1.sections[0].right_margin.cm >= 1.4
-    assert "ผ่านเกณฑ์ร้อยละ 80" in "\n".join(p.text for p in d1.paragraphs)
+    d1_para_txt = "\n".join(p.text for p in d1.paragraphs)
+    d1_all_txt = d1_para_txt + "\n".join(c.text for t in d1.tables for row in t.rows for c in row.cells)
+    for required_heading in ("ตัวชี้วัด", "เกณฑ์การให้คะแนน", "วิธีการสอน", "เกณฑ์การประเมินผล", "การมอบหมายงาน", "การตรวจสอบและอนุมัติกำหนดการสอน"):
+        assert required_heading in d1_para_txt
+    assert "ผ่านเกณฑ์ร้อยละ 80" in d1_para_txt
+    assert "Course Syllabus)Course Syllabus" not in d1_para_txt
+    assert "ผู้จัดทำกำหนดการสอน" in d1_all_txt
+    assert "Cisco Packet Tracer" not in d1_all_txt and "TIA/EIA" not in d1_all_txt and "ช่างเทคนิคเครือข่าย" not in d1_all_txt
+    assert len(d1.tables) >= 4  # meta_tbl + grade_tbl + weekly_tbl + approval_tbl
 
     # 2. Lesson plan (true A4 + no stale Cisco networking defaults + structured weekly table + approval block)
     r2 = client.post(
