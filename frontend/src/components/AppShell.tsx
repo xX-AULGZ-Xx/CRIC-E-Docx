@@ -4,12 +4,19 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  BarChart3,
   Bell,
   BookOpenCheck,
+  Car,
   CheckSquare,
   ChevronDown,
+  ClipboardCheck,
+  Clock,
+  FileSpreadsheet,
   FileText,
+  FolderKanban,
   GraduationCap,
+  Home,
   Layers,
   LayoutDashboard,
   LayoutGrid,
@@ -20,6 +27,7 @@ import {
   PackageCheck,
   PanelLeftClose,
   PanelLeftOpen,
+  Plane,
   Settings,
   ShieldCheck,
   UserCog,
@@ -185,7 +193,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const navGroups: NavGroup[] = useMemo(() => {
     const groups: NavGroup[] = [
       {
-        groupLabel: "งานสารบรรณ",
+        groupLabel: "งานสารบรรณ & ศูนย์รวม",
         items: [
           {
             href: "/",
@@ -194,10 +202,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             icon: LayoutDashboard,
           },
           {
-            href: "/draft",
-            label: "ร่างเอกสาร",
-            subtitle: "บันทึกข้อความ หนังสือภายนอก คำสั่ง ประกาศ และรายงานประชุม",
-            icon: FileText,
+            href: "/divisions",
+            label: "เอกสารประจำ 4 ฝ่าย",
+            subtitle: "ศูนย์รวมแบบฟอร์มและระบบงานแยกตามฝ่ายบริหารทรัพย์ วิชาการ พัฒนา และแผน",
+            icon: FolderKanban,
           },
           {
             href: "/templates",
@@ -208,19 +216,82 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         ],
       },
       {
-        groupLabel: "พัสดุและการสอน",
+        groupLabel: "ฝ่ายบริหารทรัพย์",
         items: [
           {
+            href: "/draft",
+            label: "บันทึกข้อความ / ภายนอก",
+            subtitle: "บันทึกข้อความ หนังสือภายนอก คำสั่ง ประกาศ และรายงานประชุม",
+            icon: FileText,
+          },
+          {
+            href: "/forms/vehicle_request",
+            label: "ขอใช้รถ",
+            subtitle: "แบบขออนุญาตใช้รถยนต์ราชการและรายชื่อผู้ร่วมเดินทาง",
+            icon: Car,
+          },
+          {
             href: "/procurement",
-            label: "จัดซื้อ / สผ.",
+            label: "ชุดจัดซื้อ",
             subtitle: "ชุดเอกสารขออนุมัติจัดซื้อวัสดุฝึก (สผ.1 / แผนฝึก / TOR)",
             icon: PackageCheck,
           },
           {
+            href: "/forms/official_travel",
+            label: "ขอไปราชการ",
+            subtitle: "แบบขออนุญาตไปราชการและประมาณการค่าใช้จ่าย",
+            icon: Plane,
+          },
+        ],
+      },
+      {
+        groupLabel: "ฝ่ายวิชาการ",
+        items: [
+          {
             href: "/teaching",
-            label: "แผนการสอน / หลังสอน",
-            subtitle: "โครงการสอน 18 สัปดาห์ แผนรายหน่วย และรายงานหลังสอน",
+            label: "กำหนดการสอน & หลังสอน",
+            subtitle: "โครงการสอน 18 สัปดาห์ แผนรายหน่วย บันทึกหลังสอน และสอนออนไลน์",
             icon: GraduationCap,
+          },
+          {
+            href: "/forms/overload_teaching",
+            label: "ขอเบิกค่าสอนเกินภาระงาน",
+            subtitle: "ตารางคาบสอนเกินภาระงานและคำนวณยอดขอเบิก",
+            icon: Clock,
+          },
+          {
+            href: "/forms/internship_supervision",
+            label: "รายงานการนิเทศฝึกงาน",
+            subtitle: "บันทึกการนิเทศนักศึกษาฝึกงานในสถานประกอบการ",
+            icon: ClipboardCheck,
+          },
+        ],
+      },
+      {
+        groupLabel: "ฝ่ายพัฒนา",
+        items: [
+          {
+            href: "/forms/home_visit",
+            label: "รายงานเยี่ยมบ้าน",
+            subtitle: "แบบรายงานการเยี่ยมบ้านนักเรียน นักศึกษา",
+            icon: Home,
+          },
+        ],
+      },
+      {
+        groupLabel: "ฝ่ายแผน",
+        items: [
+          {
+            href: "/forms/project_summary",
+            label: "สรุปโครงการ",
+            subtitle: "รายงานสรุปผลดำเนินงาน งบประมาณ และ KPI โครงการ",
+            icon: BarChart3,
+          },
+          {
+            href: "/forms/single_plan_summary",
+            label: "สรุปแผนเดี่ยว",
+            subtitle: "รายงานสรุปผลการดำเนินงานแผนปฏิบัติการรายบุคคล",
+            icon: FileSpreadsheet,
           },
         ],
       },

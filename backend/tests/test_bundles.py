@@ -433,3 +433,45 @@ def test_courses_teaching_4_modes_and_photo_upload():
     # Cleanup course
     del_res = client.delete(f"/v1/courses/{course_id}", headers={"X-User-Email": "academic@cric.ac.th"})
     assert del_res.status_code == 200
+
+
+def test_division_forms_render_save_and_links():
+    import io
+    import docx as _docx
+
+    links_res = client.get("/v1/bundles/division-links")
+    assert links_res.status_code == 200
+    assert "project_system_url" in links_res.json()["links"]
+
+    samples = [
+        ("vehicle_request", "ฝบ.", {"purpose": "ประชุมวิชาการ", "destination": "เชียงใหม่", "passengers": [{"name": "นาย ก", "position": "ครู"}]}),
+        ("official_travel", "ฝบ.", {"subject": "อบรม AI", "destination": "กรุงเทพฯ", "allowance_amount": 500, "lodging_amount": 1000}),
+        ("overload_teaching", "ฝว.", {"semester": "2/2569", "courses": [{"course_code": "21910-1001", "course_name": "เขียนโปรแกรม", "extra_hours": 4, "rate_per_hour": 200}]}),
+        ("internship_supervision", "ฝว.", {"company_name": "บริษัท เทค จำกัด", "students": [{"student_id": "662191001", "name": "นาย ข", "result": "ดีมาก"}]}),
+        ("home_visit", "ฝก.", {"student_name": "นาย ค", "guardian_name": "นาง ง", "living_condition": "อบอุ่น"}),
+        ("project_summary", "ฝย.", {"project_name": "โครงการพัฒนาดิจิทัล", "budget_allocated": 10000, "budget_spent": 8500, "kpis": [{"indicator": "ร้อยละผู้ผ่าน", "target": "80%", "actual": "90%"}]}),
+        ("single_plan_summary", "ฝย.", {"plan_name": "แผนพัฒนาห้องปฏิบัติการ", "activities": [{"activity": "ปรับปรุงระบบเครือข่าย", "target": "1 ห้อง", "result": "แล้วเสร็จ", "percent": "100%"}]}),
+    ]
+
+    for form_type, div_code, payload in samples:
+        r = client.post(
+            "/v1/bundles/forms/render",
+            headers={"X-User-Email": "academic@cric.ac.th"},
+            json={"form_type": form_type, "division_code": div_code, "convert_pdf": False, "payload": payload},
+        )
+        assert r.status_code == 200, f"{form_type} failed: {r.text}"
+        body = r.json()
+        assert body["form_type"] == form_type
+        doc = _docx.Document(io.BytesIO(client.get(body["docx_url"]).content))
+        assert len(doc.paragraphs) >= 5
+        if form_type == "overload_teaching":
+            all_txt = "\n".join(p.text for p in doc.paragraphs)
+            assert "แปดร้อยบาทถ้วน" in all_txt
+
+    save_r = client.post(
+        "/v1/bundles/forms/save",
+        headers={"X-User-Email": "academic@cric.ac.th"},
+        json={"form_type": "vehicle_request", "division_code": "ฝบ.", "subject": "ขอใช้รถประชุม", "convert_pdf": False, "payload": {"purpose": "ประชุม", "destination": "พะเยา"}},
+    )
+    assert save_r.status_code == 200
+    assert save_r.json()["document"]["doc_type"] == "vehicle_request"

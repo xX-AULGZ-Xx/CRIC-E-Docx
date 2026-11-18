@@ -94,6 +94,11 @@ def get_effective_integrations() -> dict[str, Any]:
         "panel_api_url": saved.get("panel_api_url", PANEL_API_URL),
         "panel_api_token": saved.get("panel_api_token", PANEL_API_TOKEN),
         "panel_sync_secret": saved.get("panel_sync_secret", PANEL_SYNC_SECRET),
+        "repair_system_url": saved.get("repair_system_url", ""),
+        "short_course_url": saved.get("short_course_url", ""),
+        "student_screening_url": saved.get("student_screening_url", ""),
+        "project_system_url": saved.get("project_system_url", "https://plan.cric.ac.th"),
+        "evaluation_system_url": saved.get("evaluation_system_url", ""),
     }
 
 
@@ -145,6 +150,11 @@ class IntegrationsUpdate(BaseModel):
     panel_api_url: str = "http://localhost:3000"
     panel_api_token: str = ""
     panel_sync_secret: str = ""
+    repair_system_url: str = ""
+    short_course_url: str = ""
+    student_screening_url: str = ""
+    project_system_url: str = "https://plan.cric.ac.th"
+    evaluation_system_url: str = ""
 
 
 class IntegrationTestRequest(BaseModel):
@@ -208,6 +218,11 @@ def get_admin_settings(x_user_email: str | None = Header(default=None)):
             "panel_api_url": integ["panel_api_url"],
             "panel_api_token_info": _mask(integ["panel_api_token"]),
             "panel_sync_secret_info": _mask(integ.get("panel_sync_secret", "")),
+            "repair_system_url": integ.get("repair_system_url", ""),
+            "short_course_url": integ.get("short_course_url", ""),
+            "student_screening_url": integ.get("student_screening_url", ""),
+            "project_system_url": integ.get("project_system_url", "https://plan.cric.ac.th"),
+            "evaluation_system_url": integ.get("evaluation_system_url", ""),
         },
         "notifications": {
             "enabled": bool(notif.get("enabled", False)),
@@ -268,6 +283,11 @@ def update_integrations(body: IntegrationsUpdate, x_user_email: str | None = Hea
         "panel_api_url": body.panel_api_url.strip(),
         "panel_api_token": body.panel_api_token.strip() or existing.get("panel_api_token", ""),
         "panel_sync_secret": body.panel_sync_secret.strip() or existing.get("panel_sync_secret", ""),
+        "repair_system_url": body.repair_system_url.strip(),
+        "short_course_url": body.short_course_url.strip(),
+        "student_screening_url": body.student_screening_url.strip(),
+        "project_system_url": body.project_system_url.strip() or "https://plan.cric.ac.th",
+        "evaluation_system_url": body.evaluation_system_url.strip(),
     }
     db.set_setting("integrations", data, actor["email"])
     db.add_audit_log(None, actor["email"], "integrations_updated", {"sso_issuer": data["sso_issuer"], "panel_api_url": data["panel_api_url"], "auth_dev_mode": data["auth_dev_mode"]})

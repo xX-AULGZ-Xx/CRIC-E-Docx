@@ -347,6 +347,11 @@ export interface AdminSettingsResponse {
     panel_api_url: string;
     panel_api_token_info: SecretInfo;
     panel_sync_secret_info?: SecretInfo;
+    repair_system_url?: string;
+    short_course_url?: string;
+    student_screening_url?: string;
+    project_system_url?: string;
+    evaluation_system_url?: string;
   };
   notifications: {
     enabled: boolean;
@@ -748,6 +753,11 @@ export const api = {
     panel_api_url: string;
     panel_api_token: string;
     panel_sync_secret?: string;
+    repair_system_url?: string;
+    short_course_url?: string;
+    student_screening_url?: string;
+    project_system_url?: string;
+    evaluation_system_url?: string;
   }) => apiFetch<{ ok: boolean }>("/v1/settings/integrations", { method: "PUT", body: JSON.stringify(body) }),
   testIntegration: (target: "sso" | "panel") =>
     apiFetch<{ ok: boolean; status_code: number; latency_ms: number; url?: string; error?: string }>("/v1/settings/integrations/test", {
@@ -823,6 +833,34 @@ export const api = {
       body: fd,
     });
   },
+  getDivisionLinks: () =>
+    apiFetch<{
+      links: {
+        repair_system_url: string;
+        short_course_url: string;
+        student_screening_url: string;
+        project_system_url: string;
+        evaluation_system_url: string;
+      };
+    }>("/v1/bundles/division-links"),
+  renderDivisionForm: (formType: string, payload: Record<string, unknown>, convertPdf = true, previewKey?: string) =>
+    apiFetch<{
+      form_type: string;
+      title: string;
+      docx_filename: string;
+      docx_url: string;
+      pdf_filename: string | null;
+      pdf_url: string | null;
+      page_image_urls: string[];
+    }>("/v1/bundles/forms/render", {
+      method: "POST",
+      body: JSON.stringify({ form_type: formType, payload, convert_pdf: convertPdf, preview_key: previewKey || null }),
+    }),
+  saveDivisionForm: (formType: string, divisionCode: string, subject: string, payload: Record<string, unknown>, convertPdf = true) =>
+    apiFetch<{ document: DocumentRecord; render: { docx_url: string; pdf_url: string | null; page_image_urls: string[] } }>("/v1/bundles/forms/save", {
+      method: "POST",
+      body: JSON.stringify({ form_type: formType, division_code: divisionCode, subject, payload, convert_pdf: convertPdf }),
+    }),
 
   // Courses & Bundles (สผ 2-69 + แผนการสอน 2-69)
   listCourses: (mineOnly = false) =>

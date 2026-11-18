@@ -66,6 +66,11 @@ export default function SettingsPage() {
   const [panelUrl, setPanelUrl] = useState("http://localhost:3000");
   const [panelToken, setPanelToken] = useState("");
   const [panelSyncSecret, setPanelSyncSecret] = useState("");
+  const [repairUrl, setRepairUrl] = useState("");
+  const [shortCourseUrl, setShortCourseUrl] = useState("");
+  const [screeningUrl, setScreeningUrl] = useState("");
+  const [projectSysUrl, setProjectSysUrl] = useState("https://plan.cric.ac.th");
+  const [evalSysUrl, setEvalSysUrl] = useState("");
   const [ssoRedirectHint, setSsoRedirectHint] = useState("");
   const [ssoLogoutHint, setSsoLogoutHint] = useState("");
 
@@ -117,6 +122,11 @@ export default function SettingsPage() {
       setAllowedDomain(adm.integrations.allowed_domain);
       setAuthDevMode(adm.integrations.auth_dev_mode);
       setPanelUrl(adm.integrations.panel_api_url);
+      setRepairUrl(adm.integrations.repair_system_url || "");
+      setShortCourseUrl(adm.integrations.short_course_url || "");
+      setScreeningUrl(adm.integrations.student_screening_url || "");
+      setProjectSysUrl(adm.integrations.project_system_url || "https://plan.cric.ac.th");
+      setEvalSysUrl(adm.integrations.evaluation_system_url || "");
 
       setNotifEnabled(adm.notifications.enabled);
       setNotifProvider(adm.notifications.provider);
@@ -201,6 +211,11 @@ export default function SettingsPage() {
         panel_api_url: panelUrl,
         panel_api_token: panelToken,
         panel_sync_secret: panelSyncSecret,
+        repair_system_url: repairUrl,
+        short_course_url: shortCourseUrl,
+        student_screening_url: screeningUrl,
+        project_system_url: projectSysUrl,
+        evaluation_system_url: evalSysUrl,
       });
       setSsoClientSecret("");
       setPanelToken("");
@@ -803,6 +818,31 @@ export default function SettingsPage() {
                     Panel Sync Secret {settings?.integrations.panel_sync_secret_info?.has_secret ? `(${settings.integrations.panel_sync_secret_info.masked_preview})` : ""}
                   </label>
                   <input type="password" value={panelSyncSecret} onChange={(e) => setPanelSyncSecret(e.target.value)} placeholder="เว้นว่างเพื่อคงค่าเดิม" className="ledger-input" />
+                </div>
+              </div>
+              <div className="space-y-2 rounded-md border border-[#CBD5E1] bg-[#F8FAFC] p-3">
+                <div className="text-xs font-bold text-[#0F172A]">ลิงก์ระบบงานภายนอกประจำ 4 ฝ่าย (/divisions)</div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-[#475569]">แจ้งซ่อม (ฝ่ายบริหารทรัพย์)</label>
+                    <input type="url" value={repairUrl} onChange={(e) => setRepairUrl(e.target.value)} placeholder="https://..." className="ledger-input py-1 text-xs" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-[#475569]">ระบบสมัครระยะสั้น (ฝ่ายบริหารทรัพย์)</label>
+                    <input type="url" value={shortCourseUrl} onChange={(e) => setShortCourseUrl(e.target.value)} placeholder="https://..." className="ledger-input py-1 text-xs" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-[#475569]">ระบบคัดกรองนักเรียน (ฝ่ายพัฒนา)</label>
+                    <input type="url" value={screeningUrl} onChange={(e) => setScreeningUrl(e.target.value)} placeholder="https://..." className="ledger-input py-1 text-xs" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-[#475569]">ระบบโครงการ (ฝ่ายแผน)</label>
+                    <input type="url" value={projectSysUrl} onChange={(e) => setProjectSysUrl(e.target.value)} placeholder="https://plan.cric.ac.th" className="ledger-input py-1 text-xs" />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="mb-1 block text-[11px] font-semibold text-[#475569]">ระบบประเมิน (ฝ่ายแผน)</label>
+                    <input type="url" value={evalSysUrl} onChange={(e) => setEvalSysUrl(e.target.value)} placeholder="https://..." className="ledger-input py-1 text-xs" />
+                  </div>
                 </div>
               </div>
               <div className="rounded-md border border-blue-200 bg-[#EFF6FF] p-3 text-xs text-[#1E3A8A]">

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from app.config import ATTACHMENTS_DIR, RENDERED_DIR
 from app.db import db
+from app.engine.division_forms_engine import FORM_TITLES, generate_division_form
 from app.engine.sp_engine import generate_sp_bundle
 from app.engine.teaching_engine import (
     generate_course_syllabus,
@@ -19,7 +20,7 @@ from app.engine.teaching_engine import (
     generate_post_teaching_normal,
 )
 from app.routers.auth import resolve_current_user
-from app.routers.settings import get_effective_org_profile
+from app.routers.settings import get_effective_integrations, get_effective_org_profile
 from app.services.notifier import notify_workflow_event
 
 router = APIRouter(prefix="/v1/bundles", tags=["bundles"])
@@ -184,6 +185,91 @@ async def upload_teaching_photo(file: UploadFile = File(...), x_user_email: str 
     target.write_bytes(data)
     db.add_audit_log(None, str(user.get("email") or "user"), "teaching_photo_uploaded", {"filename": fname})
     return {"filename": fname, "original_name": file.filename}
+
+
+class DivisionFormRequest(BaseModel):
+    form_type: str
+    payload: dict[str, Any] = {}
+    convert_pdf: bool = True
+    preview_key: str | None = None
+    subject: str = ""
+    division_code: str = "ฝบ."
+
+
+def _format_form_render_response(res: dict[str, Any]) -> dict[str, Any]:
+    docx_p: Path = res["docx_path"]
+    pdf_p: Path | None = res.get("pdf_path")
+    png_ps: list[Path] = res.get("png_paths") or []
+    return {
+        "form_type": res["form_type"],
+        "title": res["title"],
+        "docx_filename": docx_p.name,
+        "docx_url": f"/v1/files/rendered/{docx_p.name}",
+        "pdf_filename": pdf_p.name if pdf_p else None,
+        "pdf_url": f"/v1/files/rendered/{pdf_p.name}" if pdf_p else None,
+        "page_image_urls": [f"/v1/files/rendered/{p.name}" for p in png_ps],
+        "docx_path": str(docx_p),
+        "pdf_path": str(pdf_p) if pdf_p else "",
+    }
+
+
+@router.get("/division-links")
+def get_division_external_links():
+    integ = get_effective_integrations()
+    return {
+        "links": {
+            "repair_system_url": integ.get("repair_system_url", ""),
+            "short_course_url": integ.get("short_course_url", ""),
+            "student_screening_url": integ.get("student_screening_url", ""),
+            "project_system_url": integ.get("project_system_url", "https://plan.cric.ac.th"),
+            "evaluation_system_url": integ.get("evaluation_system_url", ""),
+        }
+    }
+
+
+@router.post("/forms/render")
+def render_division_form_preview(req: DivisionFormRequest, x_user_email: str | None = Header(default=None)):
+    user = resolve_current_user(x_user_email)
+    if req.form_type not in FORM_TITLES:
+        raise HTTPException(status_code=400, detail=f"ไม่รองรับแบบฟอร์มประเภท {req.form_type}")
+    org_profile = get_effective_org_profile()
+    key = "".join(ch for ch in (req.preview_key or uuid.uuid4().hex[:8]) if ch.isalnum() or ch in ("_", "-"))
+    enriched = _attach_instructor_signature(req.payload, user)
+    res = generate_division_form(req.form_type, enriched, RENDERED_DIR, f"preview_{key}", org_profile, convert_pdf=req.convert_pdf)
+    return _format_form_render_response(res)
+
+
+@router.post("/forms/save")
+def save_division_form_document(req: DivisionFormRequest, x_user_email: str | None = Header(default=None)):
+    user = resolve_current_user(x_user_email)
+    if req.form_type not in FORM_TITLES:
+        raise HTTPException(status_code=400, detail=f"ไม่รองรับแบบฟอร์มประเภท {req.form_type}")
+    org_profile = get_effective_org_profile()
+    doc_id = uuid.uuid4().hex[:12]
+    enriched = _attach_instructor_signature(req.payload, user)
+    res = generate_division_form(req.form_type, enriched, RENDERED_DIR, f"doc_{doc_id}", org_profile, convert_pdf=req.convert_pdf)
+    fmt = _format_form_render_response(res)
+    subject = req.subject or str(req.payload.get("subject") or req.payload.get("project_name") or req.payload.get("plan_name") or req.payload.get("purpose") or FORM_TITLES[req.form_type])
+    doc = db.save_document(
+        {
+            "id": doc_id,
+            "doc_type": req.form_type,
+            "division_code": req.division_code or "ฝบ.",
+            "doc_number": str(req.payload.get("doc_number") or ""),
+            "is_circular": False,
+            "speed_level": "ปกติ",
+            "secrecy_level": "ปกติ",
+            "font_family": "TH Sarabun New",
+            "subject": subject,
+            "payload_json": enriched,
+            "status": "draft",
+            "docx_path": fmt["docx_path"],
+            "pdf_path": fmt["pdf_path"],
+            "created_by": str(user.get("email") or user.get("username") or "user"),
+        }
+    )
+    db.add_audit_log(doc_id, str(user.get("email") or "user"), "saved_draft", {"doc_type": req.form_type})
+    return {"document": doc, "render": fmt}
 
 
 @router.post("/{doc_id}/submit")
