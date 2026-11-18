@@ -59,6 +59,15 @@ def test_sp_bundle_render_formulas_zip_and_workflow():
     assert data["grand_total_thai_text"] == "สามพันหนึ่งร้อยห้าสิบบาทถ้วน"
     assert len(data["bundle_files"]) == 5
 
+    # Verify 1_approval_memo.docx keeps bold 20pt ONLY on labels and 16pt regular on values
+    approval_file = RENDERED_DIR / data["bundle_files"][0]["filename"]
+    assert approval_file.exists()
+    doc_approval = docx.Document(approval_file)
+    for p_idx in (2, 3, 4):
+        runs = [r for r in doc_approval.paragraphs[p_idx].runs if r.text]
+        assert runs[0].bold is True and runs[0].font.size.pt == 20.0
+        assert runs[-1].bold is False and runs[-1].font.size.pt == 16.0
+
     # Verify 2-ใบสผ1.docx preserves template P03, checkboxes, Box 1-7 signers, and R30 decimal summary
     sp1_file = RENDERED_DIR / data["bundle_files"][1]["filename"]
     assert sp1_file.exists()

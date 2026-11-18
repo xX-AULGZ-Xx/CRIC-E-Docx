@@ -41,6 +41,47 @@ def _set_para_text(para: Any, new_text: str, font_size_pt: float | None = None) 
         r.text = ""
 
 
+def _set_mixed_style_runs(
+    para: Any,
+    segments: list[tuple[str, bool, float]],
+    font_name: str = "TH SarabunIT๙",
+) -> None:
+    """Replace paragraph runs with explicit per-segment bold and font size (including Thai complex-script w:szCs/w:bCs)."""
+    for child in list(para._element):
+        if child.tag.endswith("}r") or child.tag.endswith("}hyperlink") or child.tag.endswith("}proofErr"):
+            para._element.remove(child)
+    for txt, is_bold, size_pt in segments:
+        r = para.add_run(txt)
+        r.font.name = font_name
+        r.font.bold = is_bold
+        r.font.size = Pt(size_pt)
+        r_pr = r._r.get_or_add_rPr()
+        r_fonts = r_pr.find(qn("w:rFonts"))
+        if r_fonts is None:
+            r_fonts = OxmlElement("w:rFonts")
+            r_pr.insert(0, r_fonts)
+        r_fonts.set(qn("w:ascii"), font_name)
+        r_fonts.set(qn("w:hAnsi"), font_name)
+        r_fonts.set(qn("w:cs"), font_name)
+        sz_val = str(int(round(size_pt * 2)))
+        for tag in ("w:sz", "w:szCs"):
+            el = r_pr.find(qn(tag))
+            if el is None:
+                el = OxmlElement(tag)
+                r_pr.append(el)
+            el.set(qn("w:val"), sz_val)
+        for tag in ("w:b", "w:bCs"):
+            el = r_pr.find(qn(tag))
+            if el is None:
+                el = OxmlElement(tag)
+                r_pr.append(el)
+            if is_bold:
+                if qn("w:val") in el.attrib:
+                    del el.attrib[qn("w:val")]
+            else:
+                el.set(qn("w:val"), "0")
+
+
 def _set_cell_text(cell: Any, new_text: str) -> None:
     """Replace cell text cleanly preserving first paragraph/run font styling."""
     if not cell.paragraphs:
@@ -109,9 +150,29 @@ def _fill_sp1_approval_memo(
     use_service = payload.get("expense_category") == "service"
 
     ps = doc.paragraphs
-    _set_para_text(ps[2], to_thai_digits(f"ส่วนราชการ  {division}   {org_name}"))
-    _set_para_text(ps[3], to_thai_digits(f"ที่  {doc_no}\t\t\tวันที่  {doc_date}"))
-    _set_para_text(ps[4], "เรื่อง  ขออนุมัติดำเนินงานและขออนุมัติค่าใช้จ่าย ตามโครงการ/แผนปฏิบัติราชการ")
+    _set_mixed_style_runs(
+        ps[2],
+        [
+            ("ส่วนราชการ  ", True, 20.0),
+            (to_thai_digits(f"{division}   {org_name}"), False, 16.0),
+        ],
+    )
+    _set_mixed_style_runs(
+        ps[3],
+        [
+            ("ที่  ", True, 20.0),
+            (to_thai_digits(f"{doc_no}\t\t\t"), False, 16.0),
+            ("วันที่  ", True, 20.0),
+            (to_thai_digits(doc_date), False, 16.0),
+        ],
+    )
+    _set_mixed_style_runs(
+        ps[4],
+        [
+            ("เรื่อง  ", True, 20.0),
+            ("ขออนุมัติดำเนินงานและขออนุมัติค่าใช้จ่าย ตามโครงการ/แผนปฏิบัติราชการ", False, 16.0),
+        ],
+    )
     _set_para_text(ps[5], to_thai_digits(f"        ประจำปีงบประมาณ พ.ศ. {budget_year}"))
     _set_para_text(ps[7], f"เรียน  {dir_title}")
     _set_para_text(ps[8], f"\tด้วย {department}  {division}")
