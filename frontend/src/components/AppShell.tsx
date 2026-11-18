@@ -208,6 +208,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             icon: FolderKanban,
           },
           {
+            href: "/qa-tools",
+            label: "เครื่องมือ QA (32 ตัวชี้วัด)",
+            subtitle: "แบบเก็บข้อมูลประกันคุณภาพ 1.1.1–3.1.3 แยกตาม 4 ฝ่ายและงาน",
+            icon: ClipboardCheck,
+          },
+          {
             href: "/templates",
             label: "แม่แบบเอกสาร",
             subtitle: "สร้างเอกสารจากแม่แบบกำหนดเองและส่งออกชุด Batch ZIP",

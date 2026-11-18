@@ -861,6 +861,63 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ form_type: formType, division_code: divisionCode, subject, payload, convert_pdf: convertPdf }),
     }),
+  listQaTools: () =>
+    apiFetch<{
+      tools: Array<{
+        code: string;
+        title: string;
+        filename: string;
+        division_code: string;
+        division_name: string;
+        unit_name: string;
+      }>;
+    }>("/v1/bundles/qa-tools"),
+  getQaToolSchema: (code: string) =>
+    apiFetch<{
+      code: string;
+      title: string;
+      division_code: string;
+      division_name: string;
+      unit_name: string;
+      table_count: number;
+      tables: Array<{
+        t_idx: number;
+        caption: string;
+        headers: string[];
+        col_types: string[];
+        rows: Array<{
+          r_idx: number;
+          cells: Array<{
+            key: string;
+            c_idx: number;
+            type: "checkbox" | "text";
+            value: string;
+            editable: boolean;
+          }>;
+        }>;
+      }>;
+    }>(`/v1/bundles/qa-tools/${encodeURIComponent(code)}`),
+  renderQaTool: (code: string, payload: Record<string, unknown>, convertPdf = true, previewKey?: string) =>
+    apiFetch<{
+      code: string;
+      title: string;
+      docx_filename: string;
+      docx_url: string;
+      pdf_filename: string | null;
+      pdf_url: string | null;
+      page_image_urls: string[];
+    }>(`/v1/bundles/qa-tools/${encodeURIComponent(code)}/render`, {
+      method: "POST",
+      body: JSON.stringify({ payload, convert_pdf: convertPdf, preview_key: previewKey || null }),
+    }),
+  saveQaTool: (code: string, subject: string, payload: Record<string, unknown>, convertPdf = true) =>
+    apiFetch<{ document: DocumentRecord; render: { docx_url: string; pdf_url: string | null; page_image_urls: string[] } }>(
+      `/v1/bundles/qa-tools/${encodeURIComponent(code)}/save`,
+      {
+        method: "POST",
+        body: JSON.stringify({ subject, payload, convert_pdf: convertPdf }),
+      }
+    ),
 
   // Courses & Bundles (สผ 2-69 + แผนการสอน 2-69)
   listCourses: (mineOnly = false) =>

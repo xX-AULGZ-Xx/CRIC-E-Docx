@@ -475,3 +475,45 @@ def test_division_forms_render_save_and_links():
     )
     assert save_r.status_code == 200
     assert save_r.json()["document"]["doc_type"] == "vehicle_request"
+
+
+def test_qa_tools_32_catalog_schema_and_render():
+    import io
+    import docx as _docx
+
+    cat = client.get("/v1/bundles/qa-tools")
+    assert cat.status_code == 200
+    tools = cat.json()["tools"]
+    assert len(tools) == 32
+    assert any(t["code"] == "2.2.6" and t["division_code"] == "ฝบ." for t in tools)
+
+    sch = client.get("/v1/bundles/qa-tools/2.2.6")
+    assert sch.status_code == 200
+    data = sch.json()
+    assert data["code"] == "2.2.6" and data["table_count"] >= 4
+    first_tbl = data["tables"][0]
+    tick_key = first_tbl["rows"][0]["cells"][2]["key"]
+
+    r = client.post(
+        "/v1/bundles/qa-tools/2.2.6/render",
+        headers={"X-User-Email": "academic@cric.ac.th"},
+        json={
+            "convert_pdf": False,
+            "payload": {
+                "reporter_name": "นางสาวขนิษฐา สุใจยา",
+                "academic_year": "ปีการศึกษา 2569",
+                "cell_values": {tick_key: "✓"},
+            },
+        },
+    )
+    assert r.status_code == 200
+    rendered_doc = _docx.Document(io.BytesIO(client.get(r.json()["docx_url"]).content))
+    assert "✓" in rendered_doc.tables[0].rows[2].cells[2].text
+
+    sv = client.post(
+        "/v1/bundles/qa-tools/2.2.6/save",
+        headers={"X-User-Email": "academic@cric.ac.th"},
+        json={"convert_pdf": False, "payload": {"reporter_name": "ครูทดสอบ", "cell_values": {tick_key: "✓"}}},
+    )
+    assert sv.status_code == 200
+    assert sv.json()["document"]["doc_type"] == "qa_2.2.6"

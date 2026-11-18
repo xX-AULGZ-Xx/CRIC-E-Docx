@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from app.config import ATTACHMENTS_DIR, RENDERED_DIR
 from app.db import db
 from app.engine.division_forms_engine import FORM_TITLES, generate_division_form
+from app.engine.qa_tools_engine import inspect_qa_tool_schema, list_qa_tools, render_qa_tool
 from app.engine.sp_engine import generate_sp_bundle
 from app.engine.teaching_engine import (
     generate_course_syllabus,
@@ -270,6 +271,91 @@ def save_division_form_document(req: DivisionFormRequest, x_user_email: str | No
     )
     db.add_audit_log(doc_id, str(user.get("email") or "user"), "saved_draft", {"doc_type": req.form_type})
     return {"document": doc, "render": fmt}
+
+
+class QaToolRenderRequest(BaseModel):
+    payload: dict[str, Any] = {}
+    convert_pdf: bool = True
+    preview_key: str | None = None
+    subject: str = ""
+
+
+@router.get("/qa-tools")
+def get_qa_tools_catalog():
+    return {"tools": list_qa_tools()}
+
+
+@router.get("/qa-tools/{code}")
+def get_qa_tool_detail(code: str):
+    try:
+        return inspect_qa_tool_schema(code)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/qa-tools/{code}/render")
+def render_qa_tool_preview(code: str, req: QaToolRenderRequest, x_user_email: str | None = Header(default=None)):
+    user = resolve_current_user(x_user_email)
+    org_profile = get_effective_org_profile()
+    key = "".join(ch for ch in (req.preview_key or uuid.uuid4().hex[:8]) if ch.isalnum() or ch in ("_", "-"))
+    enriched = _attach_instructor_signature(req.payload, user)
+    try:
+        res = render_qa_tool(code, enriched, RENDERED_DIR, f"preview_{key}", org_profile, convert_pdf=req.convert_pdf)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    docx_p: Path = res["docx_path"]
+    pdf_p: Path | None = res.get("pdf_path")
+    png_ps: list[Path] = res.get("png_paths") or []
+    return {
+        "code": res["code"],
+        "title": res["title"],
+        "docx_filename": docx_p.name,
+        "docx_url": f"/v1/files/rendered/{docx_p.name}",
+        "pdf_filename": pdf_p.name if pdf_p else None,
+        "pdf_url": f"/v1/files/rendered/{pdf_p.name}" if pdf_p else None,
+        "page_image_urls": [f"/v1/files/rendered/{p.name}" for p in png_ps],
+    }
+
+
+@router.post("/qa-tools/{code}/save")
+def save_qa_tool_document(code: str, req: QaToolRenderRequest, x_user_email: str | None = Header(default=None)):
+    user = resolve_current_user(x_user_email)
+    org_profile = get_effective_org_profile()
+    doc_id = uuid.uuid4().hex[:12]
+    enriched = _attach_instructor_signature(req.payload, user)
+    try:
+        res = render_qa_tool(code, enriched, RENDERED_DIR, f"doc_{doc_id}", org_profile, convert_pdf=req.convert_pdf)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    docx_p: Path = res["docx_path"]
+    pdf_p: Path | None = res.get("pdf_path")
+    doc = db.save_document(
+        {
+            "id": doc_id,
+            "doc_type": f"qa_{code}",
+            "division_code": res["division_code"],
+            "doc_number": "",
+            "is_circular": False,
+            "speed_level": "ปกติ",
+            "secrecy_level": "ปกติ",
+            "font_family": "TH Sarabun New",
+            "subject": req.subject or res["title"],
+            "payload_json": enriched,
+            "status": "draft",
+            "docx_path": str(docx_p),
+            "pdf_path": str(pdf_p) if pdf_p else "",
+            "created_by": str(user.get("email") or user.get("username") or "user"),
+        }
+    )
+    db.add_audit_log(doc_id, str(user.get("email") or "user"), "saved_draft", {"doc_type": f"qa_{code}"})
+    return {
+        "document": doc,
+        "render": {
+            "docx_url": f"/v1/files/rendered/{docx_p.name}",
+            "pdf_url": f"/v1/files/rendered/{pdf_p.name}" if pdf_p else None,
+            "page_image_urls": [f"/v1/files/rendered/{p.name}" for p in (res.get("png_paths") or [])],
+        },
+    }
 
 
 @router.post("/{doc_id}/submit")

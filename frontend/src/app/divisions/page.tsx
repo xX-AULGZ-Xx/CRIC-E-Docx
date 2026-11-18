@@ -52,13 +52,22 @@ export default function DivisionsHubPage() {
               เลือกสร้างแบบฟอร์มเอกสารราชการ (.DOCX / .PDF) หรือเชื่อมโยงเข้าสู่ระบบงานเฉพาะทางของแต่ละฝ่าย
             </p>
           </div>
-          <Link
-            href="/settings"
-            className="inline-flex items-center gap-1.5 rounded-md border border-white/25 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20"
-          >
-            <Globe className="h-3.5 w-3.5" />
-            <span>ตั้งค่าลิงก์ระบบภายนอก</span>
-          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href="/qa-tools"
+              className="inline-flex items-center gap-1.5 rounded-md bg-[#1D4ED8] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#1E40AF]"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              <span>เครื่องมือ QA (32 ตัวชี้วัด)</span>
+            </Link>
+            <Link
+              href="/settings"
+              className="inline-flex items-center gap-1.5 rounded-md border border-white/25 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20"
+            >
+              <Globe className="h-3.5 w-3.5" />
+              <span>ตั้งค่าลิงก์ระบบภายนอก</span>
+            </Link>
+          </div>
         </div>
       </div>
 
