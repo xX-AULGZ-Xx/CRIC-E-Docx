@@ -29,6 +29,7 @@ def test_baht_text_conversion():
 def test_sp_bundle_render_formulas_zip_and_workflow():
     payload = {
         "project_name": "จัดซื้อวัสดุฝึกปฏิบัติการเขียนโปรแกรม",
+        "doc_number": "ฝว. 99/2569",
         "budget_year_be": 2570,
         "department_name": "แผนกวิชาเทคโนโลยีสารสนเทศ",
         "division_name": "ฝ่ายวิชาการ",
@@ -38,9 +39,22 @@ def test_sp_bundle_render_formulas_zip_and_workflow():
         "doc_date": "2026-11-16",
         "start_date": "2026-11-20",
         "end_date": "2027-02-20",
+        "sp1_subject": "ขออนุมัติจัดซื้อวัสดุฝึกปฏิบัติการเฉพาะทาง",
+        "expense_category": "service",
+        "expense_label": "ค่าจ้างเหมาปฏิบัติการ",
+        "change_flags": {
+            "additional": True,
+            "modify_budget": True,
+            "other": True,
+            "other_text": "ปรับแผนเร่งด่วน",
+        },
+        "old_budget": "2,500",
+        "new_budget": "3,150",
         "requester_name": "นายสมชาย ใจดี",
         "dept_head_name": "นางสาววิไล พัฒนา",
         "deputy_name": "นางสาวอรวรรณ แสงดาว",
+        "deputy_title": "รองผู้อำนวยการฝ่ายวิชาการ (รักษาการ)",
+        "tor_chair_name": "นายประธาน ร่างทีโออาร์",
         "include_urgent_po": True,
         "items": [
             {"name": "สายสัญญาณ UTP Cat6", "spec": "ยาว 100 เมตร", "qty": 2, "unit": "กล่อง", "unit_price": 1200, "note": ""},
@@ -67,6 +81,12 @@ def test_sp_bundle_render_formulas_zip_and_workflow():
         runs = [r for r in doc_approval.paragraphs[p_idx].runs if r.text]
         assert runs[0].bold is True and runs[0].font.size.pt == 20.0
         assert runs[-1].bold is False and runs[-1].font.size.pt == 16.0
+    approval_txt = "\n".join(p.text for p in doc_approval.paragraphs)
+    assert "๙๙/๒๕๖๙" in approval_txt
+    assert "☑ เพิ่มเติมโครงการ/กิจกรรม" in approval_txt
+    assert "งบประมาณเดิม ๒,๕๐๐ บาท" in approval_txt
+    assert "ค่าจ้างเหมาปฏิบัติการ" in approval_txt
+    assert "รองผู้อำนวยการฝ่ายวิชาการ (รักษาการ)" in approval_txt
 
     # Verify 2-ใบสผ1.docx preserves template P03, checkboxes, Box 1-7 signers, and R30 decimal summary
     sp1_file = RENDERED_DIR / data["bundle_files"][1]["filename"]

@@ -19,6 +19,7 @@ interface SpItemRow {
 export default function ProcurementBundlePage() {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [projectName, setProjectName] = useState("");
+  const [docNumber, setDocNumber] = useState("");
   const [budgetYearBe, setBudgetYearBe] = useState(2570);
   const [departmentName, setDepartmentName] = useState("");
   const [divisionName, setDivisionName] = useState("ฝ่ายวิชาการ");
@@ -38,11 +39,29 @@ export default function ProcurementBundlePage() {
   const [torBackground, setTorBackground] = useState("");
   const [torObjective, setTorObjective] = useState("");
   const [deliveryDays, setDeliveryDays] = useState(7);
+  const [sp1Subject, setSp1Subject] = useState("");
+  const [expenseCategory, setExpenseCategory] = useState<"material" | "service">("material");
+  const [expenseLabel, setExpenseLabel] = useState("");
+  const [changeFlags, setChangeFlags] = useState({
+    additional: false,
+    modify_activity: false,
+    modify_budget: false,
+    modify_period: false,
+    improve_efficiency: false,
+    other: false,
+    other_text: "",
+  });
+  const [oldBudget, setOldBudget] = useState("");
+  const [newBudget, setNewBudget] = useState("");
 
   const [requesterName, setRequesterName] = useState("");
   const [requesterTitle, setRequesterTitle] = useState("ผู้รับผิดชอบโครงการ");
   const [deptHeadName, setDeptHeadName] = useState("");
   const [deputyName, setDeputyName] = useState("");
+  const [deputyTitle, setDeputyTitle] = useState("");
+  const [torChairName, setTorChairName] = useState("");
+  const [torMember1, setTorMember1] = useState("");
+  const [torMember2, setTorMember2] = useState("");
   const [suppliesHeadName, setSuppliesHeadName] = useState("");
   const [planHeadName, setPlanHeadName] = useState("");
   const [deputyPlanName, setDeputyPlanName] = useState("");
@@ -126,6 +145,7 @@ export default function ProcurementBundlePage() {
   function buildPayload(): Record<string, unknown> {
     return {
       project_name: projectName,
+      doc_number: docNumber,
       budget_year_be: Number(budgetYearBe),
       department_name: departmentName,
       division_name: divisionName,
@@ -141,6 +161,12 @@ export default function ProcurementBundlePage() {
       expected_outcome: expectedOutcome,
       outcome_units: outcomeUnits,
       objectives: objectivesText.split("\n").map((s) => s.trim()).filter(Boolean),
+      sp1_subject: sp1Subject,
+      expense_category: expenseCategory,
+      expense_label: expenseLabel,
+      change_flags: changeFlags,
+      old_budget: oldBudget,
+      new_budget: newBudget,
       tor_background: torBackground,
       tor_objective: torObjective,
       delivery_days: Number(deliveryDays),
@@ -148,6 +174,10 @@ export default function ProcurementBundlePage() {
       requester_title: requesterTitle,
       dept_head_name: deptHeadName,
       deputy_name: deputyName,
+      deputy_title: deputyTitle,
+      tor_chair_name: torChairName,
+      tor_member_1: torMember1,
+      tor_member_2: torMember2,
       supplies_head_name: suppliesHeadName,
       plan_head_name: planHeadName,
       deputy_plan_name: deputyPlanName,
@@ -328,15 +358,27 @@ export default function ProcurementBundlePage() {
               <h2 className="text-sm font-bold text-[#0F172A]">1. ข้อมูลโครงการและหน่วยงาน</h2>
             </div>
             <div className="space-y-3 p-4">
-              <div>
-                <label className="mb-1 block font-semibold text-[#475569]">ชื่อโครงการฝึก / งานจัดซื้อ *</label>
-                <input
-                  type="text"
-                  value={projectName}
-                  onChange={(e) => setProjectName(e.target.value)}
-                  placeholder="เช่น จัดซื้อวัสดุฝึกวิชาระบบเครือข่ายคอมพิวเตอร์"
-                  className="ledger-input"
-                />
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                <div className="sm:col-span-2">
+                  <label className="mb-1 block font-semibold text-[#475569]">ชื่อโครงการฝึก / งานจัดซื้อ *</label>
+                  <input
+                    type="text"
+                    value={projectName}
+                    onChange={(e) => setProjectName(e.target.value)}
+                    placeholder="เช่น จัดซื้อวัสดุฝึกวิชาระบบเครือข่ายคอมพิวเตอร์"
+                    className="ledger-input"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block font-semibold text-[#475569]">เลขที่หนังสือ (ที่)</label>
+                  <input
+                    type="text"
+                    value={docNumber}
+                    onChange={(e) => setDocNumber(e.target.value)}
+                    placeholder="เช่น ฝว. .../2569"
+                    className="ledger-input"
+                  />
+                </div>
               </div>
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
                 <div>
@@ -439,6 +481,98 @@ export default function ProcurementBundlePage() {
                   <textarea rows={2} value={torObjective} onChange={(e) => setTorObjective(e.target.value)} className="ledger-input prose-saraban py-1.5 text-xs" />
                 </div>
               </div>
+
+              <details className="rounded-md border border-[#CBD5E1] bg-[#F8FAFC] p-2.5">
+                <summary className="cursor-pointer font-semibold text-[#0F172A]">
+                  ตัวเลือกเพิ่มเติมสำหรับบันทึกข้อความขออนุมัติและใบ สผ.1 (ปรับเปลี่ยนโครงการ, ค่าใช้จ่าย, เรื่อง)
+                </summary>
+                <div className="mt-2.5 space-y-2.5 border-t border-[#E2E8F0] pt-2.5">
+                  <div>
+                    <div className="mb-1.5 font-semibold text-[#475569]">ข้อ ๒ ขอปรับเปลี่ยนโครงการ (เลือกได้มากกว่า 1 ข้อ):</div>
+                    <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                      {(
+                        [
+                          ["additional", "เพิ่มเติมโครงการ/กิจกรรม"],
+                          ["modify_activity", "เปลี่ยนแปลงโครงการ/กิจกรรม"],
+                          ["modify_budget", "เปลี่ยนแปลงงบประมาณ"],
+                          ["modify_period", "เปลี่ยนแปลงระยะเวลาดำเนินการ"],
+                          ["improve_efficiency", "เป็นการเพิ่มประสิทธิภาพการดำเนินงาน"],
+                          ["other", "อื่น ๆ (ระบุ)"],
+                        ] as const
+                      ).map(([k, label]) => (
+                        <label key={k} className="flex cursor-pointer items-center gap-1.5 text-xs text-[#0F172A]">
+                          <input
+                            type="checkbox"
+                            checked={changeFlags[k]}
+                            onChange={(e) => setChangeFlags((p) => ({ ...p, [k]: e.target.checked }))}
+                            className="accent-[#1D4ED8]"
+                          />
+                          <span>{label}</span>
+                        </label>
+                      ))}
+                    </div>
+                    {changeFlags.modify_budget && (
+                      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1 block text-[#475569]">งบประมาณเดิม (บาท)</label>
+                          <input type="text" value={oldBudget} onChange={(e) => setOldBudget(e.target.value)} placeholder="เช่น 5,000" className="ledger-input py-1 text-xs" />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-[#475569]">งบประมาณที่ขอเปลี่ยนแปลง (บาท)</label>
+                          <input type="text" value={newBudget} onChange={(e) => setNewBudget(e.target.value)} placeholder="เช่น 6,500" className="ledger-input py-1 text-xs" />
+                        </div>
+                      </div>
+                    )}
+                    {changeFlags.other && (
+                      <div className="mt-2">
+                        <label className="mb-1 block text-[#475569]">ระบุรายละเอียด &quot;อื่น ๆ&quot;</label>
+                        <input
+                          type="text"
+                          value={changeFlags.other_text}
+                          onChange={(e) => setChangeFlags((p) => ({ ...p, other_text: e.target.value }))}
+                          placeholder="ระบุเพิ่มเติม..."
+                          className="ledger-input py-1 text-xs"
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <div>
+                      <label className="mb-1 block font-semibold text-[#475569]">หมวดค่าใช้จ่าย (ข้อ ๓)</label>
+                      <select
+                        value={expenseCategory}
+                        onChange={(e) => setExpenseCategory(e.target.value === "service" ? "service" : "material")}
+                        className="ledger-input py-1 text-xs"
+                      >
+                        <option value="material">ค่าวัสดุ</option>
+                        <option value="service">ค่าใช้สอย / จ้างเหมา</option>
+                      </select>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="mb-1 block font-semibold text-[#475569]">ชื่อรายการขออนุมัติค่าใช้จ่าย (ข้อ ๓.๑)</label>
+                      <input
+                        type="text"
+                        value={expenseLabel}
+                        onChange={(e) => setExpenseLabel(e.target.value)}
+                        placeholder="เว้นว่าง = ใช้ชื่อโครงการอัตโนมัติ"
+                        className="ledger-input py-1 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block font-semibold text-[#475569]">เรื่องในใบ สผ.1 (ถ้าต้องการกำหนดเอง)</label>
+                    <input
+                      type="text"
+                      value={sp1Subject}
+                      onChange={(e) => setSp1Subject(e.target.value)}
+                      placeholder="เว้นว่าง = ขออนุมัติจัดซื้อ/จัดจ้าง (หรือตามประเภทคำขอ)"
+                      className="ledger-input py-1 text-xs"
+                    />
+                  </div>
+                </div>
+              </details>
             </div>
           </section>
 
@@ -645,6 +779,10 @@ export default function ProcurementBundlePage() {
                   <label className="mb-1 block font-semibold text-[#475569]">รองผู้อำนวยการฝ่ายที่เกี่ยวข้อง</label>
                   <input type="text" value={deputyName} onChange={(e) => setDeputyName(e.target.value)} className="ledger-input py-1.5 text-xs" />
                 </div>
+                <div>
+                  <label className="mb-1 block font-semibold text-[#475569]">ตำแหน่งรองผู้อำนวยการ (บันทึกข้อความขออนุมัติ)</label>
+                  <input type="text" value={deputyTitle} onChange={(e) => setDeputyTitle(e.target.value)} placeholder="เว้นว่าง = รองผู้อำนวยการ + ฝ่าย" className="ledger-input py-1.5 text-xs" />
+                </div>
               </div>
               <div>
                 <label className="mb-1 block font-semibold text-[#475569]">วิธีจัดซื้อ/จัดจ้าง (สผ.1 ข้อ 5)</label>
@@ -695,6 +833,26 @@ export default function ProcurementBundlePage() {
                   <div>
                     <label className="mb-1 block text-[#475569]">ข้อ 6 รองฯ ฝ่ายบริหารทรัพยากร</label>
                     <input type="text" value={deputyResourceName} onChange={(e) => setDeputyResourceName(e.target.value)} className="ledger-input py-1 text-xs" />
+                  </div>
+                </div>
+              </details>
+
+              <details className="rounded-md border border-[#CBD5E1] bg-[#F8FAFC] p-2.5">
+                <summary className="cursor-pointer font-semibold text-[#0F172A]">
+                  กำหนดรายชื่อผู้จัดทำร่าง TOR เฉพาะใบงานนี้ (เว้นว่าง = ใช้จากกรรมการตรวจรับ)
+                </summary>
+                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <div>
+                    <label className="mb-1 block text-[#475569]">ประธาน / ผู้จัดทำ TOR</label>
+                    <input type="text" value={torChairName} onChange={(e) => setTorChairName(e.target.value)} className="ledger-input py-1 text-xs" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[#475569]">กรรมการ TOR คนที่ 1</label>
+                    <input type="text" value={torMember1} onChange={(e) => setTorMember1(e.target.value)} className="ledger-input py-1 text-xs" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[#475569]">กรรมการ TOR คนที่ 2</label>
+                    <input type="text" value={torMember2} onChange={(e) => setTorMember2(e.target.value)} className="ledger-input py-1 text-xs" />
                   </div>
                 </div>
               </details>
