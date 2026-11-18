@@ -113,6 +113,14 @@ def test_render_both_fonts_all_types():
         assert dl_attach.status_code == 200
         assert "attachment" in dl_attach.headers.get("content-disposition", "")
         assert len(dl_attach.content) > 5000
+        if payload["type"] == "memo":
+            import io
+            import docx as _docx
+
+            memo_doc = _docx.Document(io.BytesIO(dl_attach.content))
+            assert memo_doc.paragraphs[5].text.startswith("เรียน\t")
+            assert len(memo_doc.paragraphs[5].paragraph_format.tab_stops) == 1
+            assert abs(memo_doc.paragraphs[5].paragraph_format.tab_stops[0].position.cm - 1.35) < 0.05
 
 
 def test_registry_config_and_full_workflow_with_signature():

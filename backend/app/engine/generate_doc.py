@@ -367,12 +367,15 @@ def build_memo(payload: dict[str, Any], org: dict[str, Any]) -> docx.Document:
         first_line_cm=-1.35,
         tab_stops=[(WD_TAB_ALIGNMENT.LEFT, 1.35)],
     )
-    # P05: เรียน
+    # P05: เรียน (align with เรื่อง at 1.35 cm)
     set_paragraph_text(
         doc.paragraphs[5],
-        [(f"เรียน  {to_text}", 16, False, False)],
+        [(f"เรียน\t{to_text}", 16, False, False)],
         before_pt=6,
         after_pt=0,
+        left_indent_cm=1.35,
+        first_line_cm=-1.35,
+        tab_stops=[(WD_TAB_ALIGNMENT.LEFT, 1.35)],
     )
 
     cur = doc.paragraphs[5]
@@ -587,7 +590,14 @@ def build_external(payload: dict[str, Any], org: dict[str, Any]) -> docx.Documen
         first_line_cm=-1.35,
         tab_stops=[(WD_TAB_ALIGNMENT.LEFT, 1.35)],
     )
-    set_paragraph_text(doc.paragraphs[8], [(f"เรียน  {to_text}", 16, False, False)], before_pt=6)
+    set_paragraph_text(
+        doc.paragraphs[8],
+        [(f"เรียน\t{to_text}", 16, False, False)],
+        before_pt=6,
+        left_indent_cm=1.35,
+        first_line_cm=-1.35,
+        tab_stops=[(WD_TAB_ALIGNMENT.LEFT, 1.35)],
+    )
 
     cur = doc.paragraphs[8]
 
