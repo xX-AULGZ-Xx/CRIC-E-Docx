@@ -252,8 +252,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           },
           {
             href: "/profile",
-            label: "โปรไฟล์ของฉัน",
-            subtitle: "ข้อมูลราชการ ตำแหน่ง ฝ่ายงาน ลายเซ็น PNG และผู้ตรวจเริ่มต้น",
+            label: "โปรไฟล์ (ศูนย์เอกสาร)",
+            subtitle: "ศูนย์รวมข้อมูลเอกสารของฉัน คลังรายวิชา และสถานะล่าสุด",
+            icon: FileText,
+          },
+          {
+            href: "/profile/settings",
+            label: "ตั้งค่าโปรไฟล์",
+            subtitle: "ข้อมูลส่วนตัว ตำแหน่ง สังกัด รูปโปรไฟล์ และลายเซ็น PNG",
             icon: UserCog,
           },
         ],
@@ -592,8 +598,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                         onClick={() => setUserMenuOpen(false)}
                         className="flex items-center gap-2.5 rounded-md px-3 py-2 hover:bg-slate-100 hover:text-[#0F172A]"
                       >
-                        <UserCog className="h-4 w-4 text-[#1D4ED8]" />
-                        <span>โปรไฟล์ รูปประจำตัว &amp; ลายเซ็น</span>
+                        <FileText className="h-4 w-4 text-[#1D4ED8]" />
+                        <span>ศูนย์รวมเอกสารของฉัน</span>
+                      </Link>
+                      <Link
+                        href="/profile/settings"
+                        role="menuitem"
+                        onClick={() => setUserMenuOpen(false)}
+                        className="flex items-center gap-2.5 rounded-md px-3 py-2 hover:bg-slate-100 hover:text-[#0F172A]"
+                      >
+                        <UserCog className="h-4 w-4 text-indigo-600" />
+                        <span>ตั้งค่าโปรไฟล์ &amp; ลายเซ็น</span>
                       </Link>
                       <Link
                         href="/notifications"

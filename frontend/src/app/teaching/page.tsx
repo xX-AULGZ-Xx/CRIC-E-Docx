@@ -1684,7 +1684,7 @@ export default function TeachingStudioPage() {
                   {meHasSignature ? (
                     <span className="rounded bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">พร้อมใช้งาน</span>
                   ) : (
-                    <Link href="/profile?tab=signature" className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#1D4ED8] hover:underline">
+                    <Link href="/profile/settings?tab=signature" className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#1D4ED8] hover:underline">
                       <PenTool className="h-3 w-3" />
                       ยังไม่มีลายเซ็น (ไปอัปโหลด/วาด)
                     </Link>
