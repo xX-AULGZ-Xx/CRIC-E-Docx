@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, Eye, FileCheck2, PackageCheck, Plus, Send, Sparkles, Trash2 } from "lucide-react";
 import { DocumentPreviewPanel } from "@/components/DocumentPreviewPanel";
+import { NumericInput } from "@/components/NumericInput";
 import { ResponsivePreviewModal } from "@/components/ResponsivePreviewModal";
 import { api, API_BASE, BundleRenderResult, UserProfile } from "@/lib/api";
 import { toastError, toastInfo, toastSuccess } from "@/lib/swal";
@@ -391,7 +392,7 @@ export default function ProcurementBundlePage() {
                 </div>
                 <div>
                   <label className="mb-1 block font-semibold text-[#475569]">ปีงบประมาณ พ.ศ.</label>
-                  <input type="number" value={budgetYearBe} onChange={(e) => setBudgetYearBe(Number(e.target.value))} className="ledger-input tabular-nums-th py-1.5 text-xs" />
+                  <NumericInput value={budgetYearBe} onChangeValue={setBudgetYearBe} placeholder="2570" className="ledger-input tabular-nums-th py-1.5 text-xs" />
                 </div>
               </div>
 
@@ -402,7 +403,7 @@ export default function ProcurementBundlePage() {
                 </div>
                 <div>
                   <label className="mb-1 block font-semibold text-[#475569]">จำนวนนักเรียน</label>
-                  <input type="number" value={studentCount} onChange={(e) => setStudentCount(Number(e.target.value))} className="ledger-input tabular-nums-th py-1.5 text-xs" />
+                  <NumericInput min={0} value={studentCount} onChangeValue={setStudentCount} placeholder="0" className="ledger-input tabular-nums-th py-1.5 text-xs" />
                 </div>
                 <div>
                   <label className="mb-1 block font-semibold text-[#475569]">ภาคเรียน/ปี</label>
@@ -410,7 +411,7 @@ export default function ProcurementBundlePage() {
                 </div>
                 <div>
                   <label className="mb-1 block font-semibold text-[#475569]">ส่งมอบภายใน (วัน)</label>
-                  <input type="number" value={deliveryDays} onChange={(e) => setDeliveryDays(Number(e.target.value))} className="ledger-input tabular-nums-th py-1.5 text-xs" />
+                  <NumericInput min={1} value={deliveryDays} onChangeValue={setDeliveryDays} placeholder="7" className="ledger-input tabular-nums-th py-1.5 text-xs" />
                 </div>
               </div>
 
@@ -625,11 +626,12 @@ export default function ProcurementBundlePage() {
                     <div className="grid grid-cols-3 gap-2">
                       <div>
                         <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">จำนวน</label>
-                        <input
-                          type="number"
+                        <NumericInput
+                          decimal
                           min={0}
+                          placeholder="0"
                           value={it.qty}
-                          onChange={(e) => setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, qty: Number(e.target.value) } : x)))}
+                          onChangeValue={(val) => setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, qty: val } : x)))}
                           className="ledger-input py-1 text-right text-xs"
                         />
                       </div>
@@ -645,11 +647,12 @@ export default function ProcurementBundlePage() {
                       </div>
                       <div>
                         <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">ราคา/หน่วย</label>
-                        <input
-                          type="number"
+                        <NumericInput
+                          decimal
                           min={0}
+                          placeholder="0"
                           value={it.unit_price}
-                          onChange={(e) => setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, unit_price: Number(e.target.value) } : x)))}
+                          onChangeValue={(val) => setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, unit_price: val } : x)))}
                           className="ledger-input py-1 text-right text-xs"
                         />
                       </div>
@@ -699,11 +702,12 @@ export default function ProcurementBundlePage() {
                           />
                         </td>
                         <td>
-                          <input
-                            type="number"
+                          <NumericInput
+                            decimal
                             min={0}
+                            placeholder="0"
                             value={it.qty}
-                            onChange={(e) => setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, qty: Number(e.target.value) } : x)))}
+                            onChangeValue={(val) => setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, qty: val } : x)))}
                             className="ledger-input py-1 text-right text-xs"
                           />
                         </td>
@@ -717,11 +721,12 @@ export default function ProcurementBundlePage() {
                           />
                         </td>
                         <td>
-                          <input
-                            type="number"
+                          <NumericInput
+                            decimal
                             min={0}
+                            placeholder="0"
                             value={it.unit_price}
-                            onChange={(e) => setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, unit_price: Number(e.target.value) } : x)))}
+                            onChangeValue={(val) => setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, unit_price: val } : x)))}
                             className="ledger-input py-1 text-right text-xs"
                           />
                         </td>

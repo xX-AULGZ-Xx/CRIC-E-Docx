@@ -21,6 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { DocumentPreviewPanel } from "@/components/DocumentPreviewPanel";
+import { NumericInput } from "@/components/NumericInput";
 import { ResponsivePreviewModal } from "@/components/ResponsivePreviewModal";
 import { api, API_BASE, BundleRenderResult, CourseRecord, CourseWeeklyItem, DocType, UserProfile } from "@/lib/api";
 import { confirmDanger, toastError, toastInfo, toastSuccess } from "@/lib/swal";
@@ -1079,19 +1080,19 @@ export default function TeachingStudioPage() {
                           />
                           <div className="flex items-center gap-1 text-[11px] text-[#475569]">
                             <span>ท</span>
-                            <input
-                              type="number"
+                            <NumericInput
                               min={0}
+                              emptyOnZero={false}
                               value={wk.theory_hours ?? 1}
-                              onChange={(e) => setWeeklyPlan((p) => p.map((x, i) => (i === idx ? { ...x, theory_hours: Number(e.target.value) } : x)))}
+                              onChangeValue={(val) => setWeeklyPlan((p) => p.map((x, i) => (i === idx ? { ...x, theory_hours: val } : x)))}
                               className="ledger-input tabular-nums-th w-11 py-0.5 text-center text-xs"
                             />
                             <span>ป</span>
-                            <input
-                              type="number"
+                            <NumericInput
                               min={0}
+                              emptyOnZero={false}
                               value={wk.practice_hours ?? 3}
-                              onChange={(e) => setWeeklyPlan((p) => p.map((x, i) => (i === idx ? { ...x, practice_hours: Number(e.target.value) } : x)))}
+                              onChangeValue={(val) => setWeeklyPlan((p) => p.map((x, i) => (i === idx ? { ...x, practice_hours: val } : x)))}
                               className="ledger-input tabular-nums-th w-11 py-0.5 text-center text-xs"
                             />
                           </div>
@@ -1150,9 +1151,9 @@ export default function TeachingStudioPage() {
                   <div>
                     <label className="mb-1 block font-semibold text-[#475569]">ช่วงสัปดาห์ที่</label>
                     <div className="flex items-center gap-1.5">
-                      <input type="number" min={1} value={normWeekStart} onChange={(e) => setNormWeekStart(Number(e.target.value))} className="ledger-input tabular-nums-th w-16 py-1.5 text-xs" />
+                      <NumericInput min={1} value={normWeekStart} onChangeValue={setNormWeekStart} placeholder="1" className="ledger-input tabular-nums-th w-16 py-1.5 text-xs" />
                       <span className="text-[#475569]">ถึง</span>
-                      <input type="number" min={1} value={normWeekEnd} onChange={(e) => setNormWeekEnd(Number(e.target.value))} className="ledger-input tabular-nums-th w-16 py-1.5 text-xs" />
+                      <NumericInput min={1} value={normWeekEnd} onChangeValue={setNormWeekEnd} placeholder="4" className="ledger-input tabular-nums-th w-16 py-1.5 text-xs" />
                     </div>
                   </div>
                 </div>
@@ -1216,8 +1217,14 @@ export default function TeachingStudioPage() {
                         <input type="text" placeholder="ชื่อวิชา" value={sub.course_name} onChange={(e) => setNormSubjects((p) => p.map((x, i) => (i === idx ? { ...x, course_name: e.target.value } : x)))} className="ledger-input py-1 text-xs" />
                         <input type="text" placeholder="หน่วย/เรื่อง" value={sub.unit_title} onChange={(e) => setNormSubjects((p) => p.map((x, i) => (i === idx ? { ...x, unit_title: e.target.value } : x)))} className="ledger-input py-1 text-xs" />
                         <input type="text" placeholder="กลุ่มเรียน" value={sub.student_group} onChange={(e) => setNormSubjects((p) => p.map((x, i) => (i === idx ? { ...x, student_group: e.target.value } : x)))} className="ledger-input py-1 text-xs" />
-                        <input type="number" min={0} placeholder="ผู้เรียนทั้งหมด (คน)" value={sub.total_students} onChange={(e) => setNormSubjects((p) => p.map((x, i) => (i === idx ? { ...x, total_students: Number(e.target.value) } : x)))} className="ledger-input tabular-nums-th py-1 text-xs" />
-                        <input type="number" min={0} placeholder="ผ่านเกณฑ์ (คน)" value={sub.passed_students} onChange={(e) => setNormSubjects((p) => p.map((x, i) => (i === idx ? { ...x, passed_students: Number(e.target.value) } : x)))} className="ledger-input tabular-nums-th py-1 text-xs" />
+                        <div>
+                          <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">ผู้เรียนทั้งหมด (คน)</label>
+                          <NumericInput min={0} placeholder="0" value={sub.total_students} onChangeValue={(val) => setNormSubjects((p) => p.map((x, i) => (i === idx ? { ...x, total_students: val } : x)))} className="ledger-input tabular-nums-th py-1 text-xs" />
+                        </div>
+                        <div>
+                          <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">ผ่านเกณฑ์ (คน)</label>
+                          <NumericInput min={0} placeholder="0" value={sub.passed_students} onChangeValue={(val) => setNormSubjects((p) => p.map((x, i) => (i === idx ? { ...x, passed_students: val } : x)))} className="ledger-input tabular-nums-th py-1 text-xs" />
+                        </div>
                       </div>
                       <input type="text" placeholder="บันทึกการเข้าเรียนรายสัปดาห์" value={sub.weekly_attendance} onChange={(e) => setNormSubjects((p) => p.map((x, i) => (i === idx ? { ...x, weekly_attendance: e.target.value } : x)))} className="ledger-input py-1 text-xs" />
                       <textarea rows={2} placeholder="1.2) ผลการประเมินผู้เรียน" value={sub.evaluation_summary} onChange={(e) => setNormSubjects((p) => p.map((x, i) => (i === idx ? { ...x, evaluation_summary: e.target.value } : x)))} className="ledger-input prose-saraban py-1 text-xs" />
@@ -1408,7 +1415,7 @@ export default function TeachingStudioPage() {
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <div>
                     <label className="mb-1 block font-semibold text-[#475569]">สัปดาห์ที่</label>
-                    <input type="number" min={1} value={onlWeekNo} onChange={(e) => setOnlWeekNo(Number(e.target.value))} placeholder="สัปดาห์ที่" className="ledger-input tabular-nums-th py-1.5 text-xs" />
+                    <NumericInput min={1} value={onlWeekNo} onChangeValue={setOnlWeekNo} placeholder="สัปดาห์ที่" className="ledger-input tabular-nums-th py-1.5 text-xs" />
                   </div>
                   <div>
                     <label className="mb-1 block font-semibold text-[#475569]">เลขที่หนังสือ</label>
@@ -1481,8 +1488,14 @@ export default function TeachingStudioPage() {
                       <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-12">
                         <input type="text" placeholder="ระดับชั้น/ห้อง" value={ses.class_level} onChange={(e) => setOnlSessions((p) => p.map((x, i) => (i === idx ? { ...x, class_level: e.target.value } : x)))} className="ledger-input py-1 text-xs sm:col-span-4" />
                         <input type="text" placeholder="สาขางาน" value={ses.major_name} onChange={(e) => setOnlSessions((p) => p.map((x, i) => (i === idx ? { ...x, major_name: e.target.value } : x)))} className="ledger-input py-1 text-xs sm:col-span-3" />
-                        <input type="number" min={0} placeholder="ทั้งหมด" value={ses.total_students} onChange={(e) => setOnlSessions((p) => p.map((x, i) => (i === idx ? { ...x, total_students: Number(e.target.value) } : x)))} className="ledger-input tabular-nums-th py-1 text-xs sm:col-span-2" />
-                        <input type="number" min={0} placeholder="เข้าเรียน" value={ses.present_students} onChange={(e) => setOnlSessions((p) => p.map((x, i) => (i === idx ? { ...x, present_students: Number(e.target.value) } : x)))} className="ledger-input tabular-nums-th py-1 text-xs sm:col-span-2" />
+                        <div className="sm:col-span-2">
+                          <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">ทั้งหมด (คน)</label>
+                          <NumericInput min={0} placeholder="0" value={ses.total_students} onChangeValue={(val) => setOnlSessions((p) => p.map((x, i) => (i === idx ? { ...x, total_students: val } : x)))} className="ledger-input tabular-nums-th py-1 text-xs" />
+                        </div>
+                        <div className="sm:col-span-2">
+                          <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">เข้าเรียน (คน)</label>
+                          <NumericInput min={0} placeholder="0" value={ses.present_students} onChangeValue={(val) => setOnlSessions((p) => p.map((x, i) => (i === idx ? { ...x, present_students: val } : x)))} className="ledger-input tabular-nums-th py-1 text-xs" />
+                        </div>
                         <button type="button" onClick={() => setOnlSessions((p) => p.filter((_, i) => i !== idx))} className="col-span-2 flex items-center justify-end text-slate-400 hover:text-[#B91C1C] sm:col-span-1 sm:justify-center">
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -1540,8 +1553,14 @@ export default function TeachingStudioPage() {
                         </div>
                         <input type="text" placeholder="สาขาวิชา / สาขางาน" value={sec.major_name} onChange={(e) => setOnlSections((p) => p.map((x, i) => (i === idx ? { ...x, major_name: e.target.value } : x)))} className="ledger-input py-1 text-xs" />
                         <input type="text" placeholder="แผนกวิชา" value={sec.department_name} onChange={(e) => setOnlSections((p) => p.map((x, i) => (i === idx ? { ...x, department_name: e.target.value } : x)))} className="ledger-input py-1 text-xs" />
-                        <input type="number" min={0} placeholder="ผู้เรียนทั้งหมด (คน)" value={sec.total_students} onChange={(e) => setOnlSections((p) => p.map((x, i) => (i === idx ? { ...x, total_students: Number(e.target.value) } : x)))} className="ledger-input tabular-nums-th py-1 text-xs" />
-                        <input type="number" min={0} placeholder="เข้าเรียน (คน)" value={sec.present_students} onChange={(e) => setOnlSections((p) => p.map((x, i) => (i === idx ? { ...x, present_students: Number(e.target.value) } : x)))} className="ledger-input tabular-nums-th py-1 text-xs" />
+                        <div>
+                          <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">ผู้เรียนทั้งหมด (คน)</label>
+                          <NumericInput min={0} placeholder="0" value={sec.total_students} onChangeValue={(val) => setOnlSections((p) => p.map((x, i) => (i === idx ? { ...x, total_students: val } : x)))} className="ledger-input tabular-nums-th py-1 text-xs" />
+                        </div>
+                        <div>
+                          <label className="mb-0.5 block text-[11px] font-semibold text-[#475569]">เข้าเรียน (คน)</label>
+                          <NumericInput min={0} placeholder="0" value={sec.present_students} onChangeValue={(val) => setOnlSections((p) => p.map((x, i) => (i === idx ? { ...x, present_students: val } : x)))} className="ledger-input tabular-nums-th py-1 text-xs" />
+                        </div>
                       </div>
                       <input type="text" placeholder="รายชื่อผู้ที่ขาดเรียน (ถ้ามี)" value={sec.absent_names} onChange={(e) => setOnlSections((p) => p.map((x, i) => (i === idx ? { ...x, absent_names: e.target.value } : x)))} className="ledger-input py-1 text-xs" />
 
