@@ -295,21 +295,23 @@ export default function DivisionDynamicFormPage() {
   return (
     <div className="space-y-4">
       {/* Banner */}
-      <div className="ledger-panel flex flex-wrap items-center justify-between gap-3 bg-[#0F172A] px-5 py-4 text-white">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded border border-white/25 bg-white/10 px-2 py-0.5 text-[10px] font-bold">{meta.divisionName}</span>
-            <h2 className="text-base font-bold">{meta.title}</h2>
+      <div className="ledger-panel overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 bg-[#0F172A] px-5 py-4 text-white">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded border border-white/25 bg-white/10 px-2 py-0.5 text-[10px] font-bold">{meta.divisionName}</span>
+              <h2 className="text-base font-bold">{meta.title}</h2>
+            </div>
+            <p className="mt-0.5 text-xs text-slate-300">{meta.description}</p>
           </div>
-          <p className="mt-0.5 text-xs text-slate-300">{meta.description}</p>
+          <Link
+            href="/divisions"
+            className="inline-flex items-center gap-1.5 rounded-md border border-white/25 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span>เอกสารประจำ 4 ฝ่าย</span>
+          </Link>
         </div>
-        <Link
-          href="/divisions"
-          className="inline-flex items-center gap-1.5 rounded-md border border-white/25 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          <span>เอกสารประจำ 4 ฝ่าย</span>
-        </Link>
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
