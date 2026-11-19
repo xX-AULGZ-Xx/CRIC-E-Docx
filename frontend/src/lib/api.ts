@@ -473,6 +473,43 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   return resp.json() as Promise<T>;
 }
 
+export interface TimetableParsedItem {
+  course_code: string;
+  course_name: string;
+  t_hours: number;
+  p_hours: number;
+  credit_num: number;
+  credits: string;
+  curriculum_level: string;
+  student_group: string;
+  total_students: number;
+  schedule_text: string;
+  room: string;
+  semester: string;
+  selected?: boolean;
+}
+
+export interface TimetableParseResponse {
+  items: TimetableParsedItem[];
+  source: string;
+  warnings: string[];
+}
+
+export interface TimetableImportResponse {
+  imported: CourseRecord[];
+  skipped_count: number;
+  courses: CourseRecord[];
+}
+
+export interface Sornor02ImportPayload {
+  url: string;
+  auth_mode: "none" | "cookie" | "credentials";
+  username?: string;
+  password?: string;
+  cookie_header?: string;
+  default_semester?: string;
+}
+
 export const api = {
   listServices: (role?: string) =>
     apiFetch<{
@@ -922,6 +959,22 @@ export const api = {
   // Courses & Bundles (สผ 2-69 + แผนการสอน 2-69)
   listCourses: (mineOnly = false) =>
     apiFetch<{ courses: CourseRecord[] }>(`/v1/courses${mineOnly ? "?mine_only=true" : ""}`),
+  getTimetableTemplateUrl: () => `${API_BASE}/v1/courses/timetable-template`,
+  parseTimetable: (formData: FormData) =>
+    apiFetch<TimetableParseResponse>("/v1/courses/parse-timetable", {
+      method: "POST",
+      body: formData,
+    }),
+  importSornor02: (payload: Sornor02ImportPayload) =>
+    apiFetch<TimetableParseResponse>("/v1/courses/import-sornor02", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  importCourses: (items: TimetableParsedItem[]) =>
+    apiFetch<TimetableImportResponse>("/v1/courses/import", {
+      method: "POST",
+      body: JSON.stringify({ items }),
+    }),
   saveCourse: (body: CourseRecord) =>
     apiFetch<{ course: CourseRecord }>("/v1/courses", { method: "POST", body: JSON.stringify(body) }),
   deleteCourse: (courseId: string) =>

@@ -517,3 +517,96 @@ def test_qa_tools_32_catalog_schema_and_render():
     )
     assert sv.status_code == 200
     assert sv.json()["document"]["doc_type"] == "qa_2.2.6"
+
+
+def test_timetable_template_parse_sornor02_and_batch_import(monkeypatch):
+    import io
+
+    import httpx
+    import openpyxl
+
+    headers = {"X-User-Email": "academic@cric.ac.th"}
+
+    # 1. Download template .xlsx
+    tpl_res = client.get("/v1/courses/timetable-template", headers=headers)
+    assert tpl_res.status_code == 200
+    wb = openpyxl.load_workbook(io.BytesIO(tpl_res.content))
+    assert wb.active.cell(1, 1).value == "รหัสวิชา"
+
+    # 2. Parse uploaded .xlsx template
+    xlsx_parse = client.post(
+        "/v1/courses/parse-timetable",
+        headers=headers,
+        files={"file": ("timetable.xlsx", tpl_res.content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"default_semester": "2/2569"},
+    )
+    assert xlsx_parse.status_code == 200
+    xlsx_items = xlsx_parse.json()["items"]
+    assert len(xlsx_items) >= 2
+    assert xlsx_items[0]["course_code"] == "20100-1001"
+    assert xlsx_items[0]["total_students"] == 28
+
+    # 3. Parse pasted ศธ.02 HTML grid + student count
+    sornor_html = """
+    <html><body>
+      <table>
+        <tr><th>วัน/คาบ</th><th>1</th><th>2</th><th>3</th></tr>
+        <tr><td>จันทร์</td><td colspan="2">20901-2005 การเขียนโปรแกรมเบื้องต้น 1-3-2 ปวช.1/2 ห้อง 422</td><td></td></tr>
+      </table>
+      <table>
+        <tr><td>66209010001</td><td>นายทดสอบ หนึ่ง</td></tr>
+        <tr><td>66209010002</td><td>นางสาวทดสอบ สอง</td></tr>
+      </table>
+    </body></html>
+    """
+    html_parse = client.post(
+        "/v1/courses/parse-timetable",
+        headers=headers,
+        data={"raw_text": sornor_html, "default_semester": "2/2569"},
+    )
+    assert html_parse.status_code == 200
+    html_items = html_parse.json()["items"]
+    assert len(html_items) == 1
+    assert html_items[0]["course_code"] == "20901-2005"
+    assert "จันทร์" in html_items[0]["schedule_text"]
+    assert html_items[0]["total_students"] == 2
+
+    # 4. Direct ศธ.02 web connector (mocked httpx) - success & CAPTCHA detection
+    class _MockResp:
+        def __init__(self, text: str, url: str = "https://std2018.vec.go.th/timetable"):
+            self.text = text
+            self.url = url
+
+    async def _fake_get_ok(self, url, **kwargs):
+        return _MockResp(sornor_html, url)
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_get_ok)
+    web_res = client.post(
+        "/v1/courses/import-sornor02",
+        headers=headers,
+        json={"url": "https://std2018.vec.go.th/timetable", "auth_mode": "none", "default_semester": "2/2569"},
+    )
+    assert web_res.status_code == 200
+    assert web_res.json()["items"][0]["course_code"] == "20901-2005"
+
+    async def _fake_get_captcha(self, url, **kwargs):
+        return _MockResp('<form><div class="g-recaptcha">กรุณากรอกรหัสภาพ</div></form>', url)
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_get_captcha)
+    cap_res = client.post(
+        "/v1/courses/import-sornor02",
+        headers=headers,
+        json={"url": "https://std2018.vec.go.th/login", "auth_mode": "none"},
+    )
+    assert cap_res.status_code == 400
+    assert "CAPTCHA" in cap_res.json()["detail"]
+
+    # 5. Batch import & deduplication
+    imp1 = client.post("/v1/courses/import", headers=headers, json={"items": html_items})
+    assert imp1.status_code == 200
+    assert len(imp1.json()["imported"]) == 1
+
+    imp2 = client.post("/v1/courses/import", headers=headers, json={"items": html_items})
+    assert imp2.status_code == 200
+    assert len(imp2.json()["imported"]) == 0
+    assert imp2.json()["skipped_count"] == 1

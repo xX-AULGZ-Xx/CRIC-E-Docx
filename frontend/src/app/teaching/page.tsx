@@ -23,7 +23,17 @@ import {
 import { DocumentPreviewPanel } from "@/components/DocumentPreviewPanel";
 import { NumericInput } from "@/components/NumericInput";
 import { ResponsivePreviewModal } from "@/components/ResponsivePreviewModal";
-import { api, API_BASE, BundleRenderResult, CourseRecord, CourseWeeklyItem, DocType, UserProfile } from "@/lib/api";
+import { TimetableImportPanel } from "@/components/TimetableImportPanel";
+import {
+  api,
+  API_BASE,
+  BundleRenderResult,
+  CourseRecord,
+  CourseWeeklyItem,
+  DocType,
+  TimetableParsedItem,
+  UserProfile,
+} from "@/lib/api";
 import { confirmDanger, toastError, toastInfo, toastSuccess } from "@/lib/swal";
 
 type TeachingTab = "syllabus" | "lesson_plan" | "normal_post" | "online_post";
@@ -404,6 +414,66 @@ export default function TeachingStudioPage() {
     setWeeklyPlan(c.weekly_plan_json || c.weekly_plan || []);
   }
 
+  function handleTimetableImportSuccess(
+    importedItems: TimetableParsedItem[],
+    savedCourses: CourseRecord[],
+    allCourses: CourseRecord[],
+    skippedCount: number
+  ) {
+    setCourses(allCourses);
+    const firstCourse = savedCourses[0] || allCourses[0];
+    if (firstCourse) {
+      applyCourseToForm(firstCourse);
+      if (firstCourse.semester) {
+        setNormSemester(firstCourse.semester);
+      }
+    }
+
+    if (importedItems.length > 0) {
+      setNormSubjects(
+        importedItems.map((it) => ({
+          ...emptyNormalSubject(),
+          course_code: it.course_code,
+          course_name: it.course_name,
+          student_group: it.student_group || "",
+          total_students: it.total_students || 0,
+          attended_students: it.total_students || 0,
+        }))
+      );
+
+      const dept = normDept || courseForm.department_name || "";
+      setOnlSections(
+        importedItems.map((it) => ({
+          ...emptyOnlineSection(dept),
+          course_code: it.course_code,
+          course_name: it.course_name,
+          level_type: it.curriculum_level === "ปวส." ? "ปวส." : "ปวช.",
+          student_group: it.student_group || "",
+          major_name: dept,
+          total_students: it.total_students || 0,
+          present_students: it.total_students || 0,
+        }))
+      );
+      setOnlSessions(
+        importedItems.map((it) => ({
+          date_text: "",
+          course_label: `${it.course_code} ${it.course_name}`.trim(),
+          time_text: it.schedule_text || "",
+          class_level: it.student_group || it.curriculum_level || "",
+          major_name: dept,
+          total_students: it.total_students || 0,
+          present_students: it.total_students || 0,
+        }))
+      );
+    }
+
+    setMsg(
+      `นำเข้าตารางสอนสำเร็จ ${savedCourses.length} วิชา${
+        skippedCount > 0 ? ` (ข้ามรายการซ้ำ ${skippedCount} วิชา)` : ""
+      } และเติมข้อมูลเข้า Tab 1–4 เรียบร้อยแล้ว`
+    );
+  }
+
   function currentCoursePayload(): CourseRecord {
     return {
       ...courseForm,
@@ -772,6 +842,12 @@ export default function TeachingStudioPage() {
           {msg}
         </div>
       )}
+
+      <TimetableImportPanel
+        coursesCount={courses.length}
+        defaultSemester={courseForm.semester || normSemester || "2/2569"}
+        onImportSuccess={handleTimetableImportSuccess}
+      />
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
         {/* Left Form Column */}
