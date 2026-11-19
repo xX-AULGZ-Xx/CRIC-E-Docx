@@ -161,6 +161,15 @@ SYSTEM_TEMPLATE_CATALOG: list[dict[str, Any]] = [
         "min_tables": 1,
         "min_sheets": 0,
     },
+    {
+        "key": "repair_request",
+        "rel_path": "repair_request.docx",
+        "name": "บันทึกข้อความแจ้งซ่อม (งานอาคารสถานที่)",
+        "group": "ฝ่ายบริหารทรัพยากร",
+        "file_type": "docx",
+        "min_tables": 1,
+        "min_sheets": 0,
+    },
 ]
 
 _CATALOG_BY_KEY: dict[str, dict[str, Any]] = {item["key"]: item for item in SYSTEM_TEMPLATE_CATALOG}

@@ -687,3 +687,70 @@ PLC ชุมชนการเรียนรู้ทางวิชาชี�
     dve = next(i for i in net_items if "692191002" in i["student_group"])
     assert dve["system_type"] == "ทวิภาคี"
     assert "อังคาร" in dve["schedule_text"] and "พุธ" in dve["schedule_text"]
+
+
+def test_repair_request_form_render_and_save():
+    import io
+    import docx as _docx
+
+    headers = {"X-User-Email": "academic@cric.ac.th"}
+    payload = {
+        "doc_number": "ฝบ. 123/2569",
+        "doc_date": "2026-11-19",
+        "department_name": "แผนกวิชาเทคโนโลยีธุรกิจดิจิทัล",
+        "division_name": "ฝ่ายวิชาการ",
+        "requester_name": "นายณัฐพงศ์ มะโนวัง",
+        "requester_title": "ครู",
+        "deputy_resource_name": "นางสาวอรวรรณ แสงดาว",
+        "categories": ["ครุภัณฑ์", "ระบบไฟฟ้า-ประปา"],
+        "other_category_text": "เครื่องปรับอากาศ",
+        "items": [
+            {
+                "description": "เครื่องโปรเจคเตอร์",
+                "cause": "เปิดไม่ติด",
+                "quantity": 1,
+                "unit": "เครื่อง",
+                "location": "ห้อง 2205",
+            },
+            {
+                "description": "ปลั๊กไฟติดผนัง",
+                "cause": "ชำรุด/หลวม",
+                "quantity": 2,
+                "unit": "จุด",
+                "location": "ห้อง 2204",
+            },
+        ],
+        "include_photo_page": True,
+    }
+    r = client.post(
+        "/v1/bundles/forms/render",
+        headers=headers,
+        json={"form_type": "repair_request", "payload": payload, "convert_pdf": False},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["form_type"] == "repair_request"
+    doc_bytes = client.get(body["docx_url"]).content
+    doc = _docx.Document(io.BytesIO(doc_bytes))
+    full_text = "\n".join(p.text for p in doc.paragraphs)
+    assert "☑ ครุภัณฑ์" in full_text
+    assert "☑ ระบบไฟฟ้า-ประปา" in full_text
+    assert "☐ สาธารณูปโภค" in full_text
+    assert "☑ อื่นๆ เครื่องปรับอากาศ" in full_text
+    assert "แนบรายละเอียดรูปภาพ" in full_text
+    assert doc.tables[0].rows[1].cells[1].text.strip() == "เครื่องโปรเจคเตอร์"
+    assert doc.tables[0].rows[2].cells[5].text.strip() == "ห้อง 2204"
+
+    sv = client.post(
+        "/v1/bundles/forms/save",
+        headers=headers,
+        json={
+            "form_type": "repair_request",
+            "division_code": "ฝบ.",
+            "subject": "ขอแจ้งซ่อมบำรุง ห้อง 2205",
+            "payload": payload,
+            "convert_pdf": False,
+        },
+    )
+    assert sv.status_code == 200
+    assert sv.json()["document"]["doc_type"] == "repair_request"

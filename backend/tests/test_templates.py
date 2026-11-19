@@ -291,7 +291,9 @@ def test_system_templates_catalog_validation_override_and_reset():
     res = client.get("/v1/templates/system", headers=admin_hdr)
     assert res.status_code == 200
     items = res.json()["templates"]
-    assert len(items) == 16
+    assert len(items) == 17
+    keys = {i["key"] for i in items}
+    assert "repair_request" in keys
 
     # Reject invalid structure: upload empty docx (0 tables) into sp_2_sp1_purchase (requires min_tables=1)
     bad_doc = docx.Document()

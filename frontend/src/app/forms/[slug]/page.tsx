@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Download, Eye, FileCheck2, Loader2, Plus, Send, Trash2 } from "lucide-react";
+import { ArrowLeft, Download, Eye, FileCheck2, ImagePlus, Loader2, Plus, Send, Trash2 } from "lucide-react";
 import { DocumentPreviewPanel } from "@/components/DocumentPreviewPanel";
 import { NumericInput } from "@/components/NumericInput";
 import { ResponsivePreviewModal } from "@/components/ResponsivePreviewModal";
@@ -97,6 +97,18 @@ export default function DivisionDynamicFormPage() {
     { activity: "", target: "", result: "", percent: "100%" },
   ]);
 
+  // Repair Request (งานอาคารสถานที่)
+  const [repairCategories, setRepairCategories] = useState<string[]>(["ครุภัณฑ์"]);
+  const [repairOtherCategory, setRepairOtherCategory] = useState("");
+  const [repairDivisionName, setRepairDivisionName] = useState("ฝ่ายบริหารทรัพยากร");
+  const [repairDeputyName, setRepairDeputyName] = useState("นางสาวอรวรรณ แสงดาว");
+  const [repairItems, setRepairItems] = useState<
+    Array<{ description: string; cause: string; quantity: number; unit: string; location: string }>
+  >([{ description: "", cause: "", quantity: 1, unit: "เครื่อง", location: "" }]);
+  const [repairPhotos, setRepairPhotos] = useState<Array<{ filename: string; caption: string }>>([]);
+  const [repairIncludePhotoPage, setRepairIncludePhotoPage] = useState(true);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
   // Preview & Workflow
   const previewKeyRef = useRef(Math.random().toString(36).slice(2, 10));
   const [busy, setBusy] = useState(false);
@@ -126,6 +138,10 @@ export default function DivisionDynamicFormPage() {
       }
       const dir = list.find((x) => x.role === "director");
       if (dir?.email) setApproverEmail(dir.email);
+      const depRes = list.find(
+        (x) => x.is_active && x.role === "deputy_director" && (x.division_code === "ฝบ." || x.position_title.includes("บริหารทรัพยากร"))
+      );
+      if (depRes?.full_name) setRepairDeputyName(depRes.full_name);
     });
   }, []);
 
@@ -171,6 +187,18 @@ export default function DivisionDynamicFormPage() {
         transport_amount: transportAmount,
         other_amount: otherAmount,
         travelers: travelers.filter((t) => t.name.trim()),
+      };
+    }
+    if (slug === "repair_request") {
+      return {
+        ...base,
+        division_name: repairDivisionName || "ฝ่ายบริหารทรัพยากร",
+        categories: repairCategories,
+        other_category_text: repairOtherCategory,
+        deputy_resource_name: repairDeputyName,
+        items: repairItems.filter((it) => it.description.trim() || it.cause.trim() || it.location.trim()),
+        photos: repairPhotos.slice(0, 4),
+        include_photo_page: repairIncludePhotoPage,
       };
     }
     if (slug === "overload_teaching") {
@@ -467,6 +495,207 @@ export default function DivisionDynamicFormPage() {
                         </button>
                       </div>
                     ))}
+                  </div>
+                </>
+              )}
+
+              {slug === "repair_request" && (
+                <>
+                  <div className="space-y-2">
+                    <label className="block font-semibold text-[#475569]">ประเภทการแจ้งซ่อมบำรุง (เลือกได้มากกว่า 1)</label>
+                    <div className="flex flex-wrap gap-2">
+                      {["ครุภัณฑ์", "ระบบไฟฟ้า-ประปา", "สาธารณูปโภค", "อาคารสิ่งก่อสร้าง", "อื่นๆ"].map((cat) => {
+                        const active = repairCategories.includes(cat);
+                        return (
+                          <label
+                            key={cat}
+                            className={`inline-flex cursor-pointer items-center gap-1.5 rounded border px-2.5 py-1 text-xs font-medium ${
+                              active ? "border-[#1D4ED8] bg-[#EFF6FF] text-[#1E3A8A]" : "border-[#CBD5E1] bg-white text-[#475569]"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={active}
+                              onChange={(e) => {
+                                if (e.target.checked) setRepairCategories((p) => [...p, cat]);
+                                else setRepairCategories((p) => p.filter((x) => x !== cat));
+                              }}
+                            />
+                            {cat}
+                          </label>
+                        );
+                      })}
+                    </div>
+                    {(repairCategories.includes("อื่นๆ") || repairOtherCategory) && (
+                      <input
+                        type="text"
+                        placeholder="ระบุประเภทอื่นๆ..."
+                        value={repairOtherCategory}
+                        onChange={(e) => setRepairOtherCategory(e.target.value)}
+                        className="ledger-input py-1.5 text-xs"
+                      />
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block font-semibold text-[#475569]">สังกัดฝ่าย</label>
+                      <input
+                        type="text"
+                        value={repairDivisionName}
+                        onChange={(e) => setRepairDivisionName(e.target.value)}
+                        className="ledger-input py-1.5 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block font-semibold text-[#475569]">รองผู้อำนวยการฝ่ายบริหารทรัพยากร</label>
+                      <input
+                        type="text"
+                        value={repairDeputyName}
+                        onChange={(e) => setRepairDeputyName(e.target.value)}
+                        className="ledger-input py-1.5 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 border-t border-[#E2E8F0] pt-3">
+                    <div className="flex items-center justify-between font-bold text-[#0F172A]">
+                      <span>รายการแจ้งปรับปรุงซ่อมแซม / ซ่อมบำรุง ({repairItems.length} รายการ)</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setRepairItems((p) => [...p, { description: "", cause: "", quantity: 1, unit: "เครื่อง", location: "" }])
+                        }
+                        className="inline-flex items-center gap-1 rounded border border-[#CBD5E1] px-2 py-1 text-[11px] font-semibold hover:bg-slate-50"
+                      >
+                        <Plus className="h-3 w-3" /> เพิ่มรายการ
+                      </button>
+                    </div>
+                    {repairItems.map((it, idx) => (
+                      <div key={idx} className="grid grid-cols-12 gap-1.5 rounded border border-[#E2E8F0] bg-[#F8FAFC] p-2">
+                        <input
+                          type="text"
+                          placeholder="รายละเอียด/รายการแจ้งซ่อม"
+                          value={it.description}
+                          onChange={(e) =>
+                            setRepairItems((prev) => prev.map((x, i) => (i === idx ? { ...x, description: e.target.value } : x)))
+                          }
+                          className="ledger-input col-span-12 py-1 text-xs sm:col-span-6"
+                        />
+                        <input
+                          type="text"
+                          placeholder="สาเหตุ/ลักษณะการชำรุด"
+                          value={it.cause}
+                          onChange={(e) =>
+                            setRepairItems((prev) => prev.map((x, i) => (i === idx ? { ...x, cause: e.target.value } : x)))
+                          }
+                          className="ledger-input col-span-12 py-1 text-xs sm:col-span-6"
+                        />
+                        <div className="col-span-4 sm:col-span-2">
+                          <NumericInput
+                            min={1}
+                            placeholder="จำนวน"
+                            value={it.quantity}
+                            onChangeValue={(v) =>
+                              setRepairItems((prev) => prev.map((x, i) => (i === idx ? { ...x, quantity: v } : x)))
+                            }
+                            className="ledger-input w-full py-1 text-xs"
+                          />
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="หน่วย"
+                          value={it.unit}
+                          onChange={(e) =>
+                            setRepairItems((prev) => prev.map((x, i) => (i === idx ? { ...x, unit: e.target.value } : x)))
+                          }
+                          className="ledger-input col-span-4 py-1 text-xs sm:col-span-3"
+                        />
+                        <input
+                          type="text"
+                          placeholder="สถานที่ (เช่น ห้อง 2205)"
+                          value={it.location}
+                          onChange={(e) =>
+                            setRepairItems((prev) => prev.map((x, i) => (i === idx ? { ...x, location: e.target.value } : x)))
+                          }
+                          className="ledger-input col-span-3 py-1 text-xs sm:col-span-6"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setRepairItems((prev) => prev.filter((_, i) => i !== idx))}
+                          className="col-span-1 flex items-center justify-center text-slate-400 hover:text-[#B91C1C]"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="space-y-2 border-t border-[#E2E8F0] pt-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-bold text-[#0F172A]">แนบรายละเอียดรูปภาพประกอบ (สูงสุด 4 รูป — หน้าที่ 2)</span>
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-[#475569]">
+                        <input
+                          type="checkbox"
+                          checked={repairIncludePhotoPage}
+                          onChange={(e) => setRepairIncludePhotoPage(e.target.checked)}
+                        />
+                        แสดงหน้า 2 ในเอกสาร
+                      </label>
+                    </div>
+                    {repairPhotos.length < 4 && (
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded border border-dashed border-[#CBD5E1] bg-[#F8FAFC] px-3 py-1.5 text-xs font-semibold text-[#1D4ED8] hover:border-[#1D4ED8]">
+                        <ImagePlus className="h-4 w-4" />
+                        {uploadingPhoto ? "กำลังอัปโหลด..." : `เพิ่มรูปภาพ (${repairPhotos.length}/4)`}
+                        <input
+                          type="file"
+                          accept=".jpg,.jpeg,.png,.webp"
+                          disabled={uploadingPhoto}
+                          className="hidden"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            setUploadingPhoto(true);
+                            try {
+                              const up = await api.uploadTeachingPhoto(file);
+                              setRepairPhotos((p) => [...p, { filename: up.filename, caption: file.name.replace(/\.[^.]+$/, "") }]);
+                              setRepairIncludePhotoPage(true);
+                            } catch (err) {
+                              toastError(err instanceof Error ? err.message : "อัปโหลดรูปภาพไม่สำเร็จ");
+                            } finally {
+                              setUploadingPhoto(false);
+                              e.target.value = "";
+                            }
+                          }}
+                        />
+                      </label>
+                    )}
+                    {repairPhotos.length > 0 && (
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {repairPhotos.map((ph, idx) => (
+                          <div key={ph.filename} className="flex items-center gap-2 rounded border border-[#E2E8F0] bg-[#F8FAFC] p-2">
+                            <input
+                              type="text"
+                              value={ph.caption}
+                              placeholder={`คำบรรยายรูปที่ ${idx + 1}`}
+                              onChange={(e) =>
+                                setRepairPhotos((prev) =>
+                                  prev.map((x, i) => (i === idx ? { ...x, caption: e.target.value } : x))
+                                )
+                              }
+                              className="ledger-input flex-1 py-1 text-xs"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setRepairPhotos((prev) => prev.filter((_, i) => i !== idx))}
+                              className="text-slate-400 hover:text-[#B91C1C]"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </>
               )}

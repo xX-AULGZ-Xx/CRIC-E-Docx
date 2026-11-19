@@ -12,7 +12,7 @@ from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import nsdecls, qn
 from docx.shared import Cm, Pt
 
-from app.config import SIGNATURES_DIR
+from app.config import ATTACHMENTS_DIR, SIGNATURES_DIR
 from app.engine.pdf_converter import convert_office_to_pdf, render_pdf_pages_to_png
 from app.engine.template_resolver import resolve_system_template
 from app.engine.thai_baht import baht_text
@@ -23,6 +23,7 @@ DEFAULT_FONT = "TH Sarabun New"
 FORM_TITLES: dict[str, str] = {
     "vehicle_request": "แบบขออนุญาตใช้รถยนต์ราชการ",
     "official_travel": "แบบขออนุญาตไปราชการ",
+    "repair_request": "บันทึกข้อความแจ้งซ่อมบำรุง",
     "overload_teaching": "แบบขอเบิกค่าสอนเกินภาระงาน",
     "internship_supervision": "รายงานการนิเทศฝึกงานนักเรียน นักศึกษา",
     "home_visit": "แบบรายงานการเยี่ยมบ้านนักเรียน นักศึกษา",
@@ -248,6 +249,142 @@ def _add_memo_header(doc: docx.Document, title: str, payload: dict[str, Any], or
     _add_kv_line(doc, "เรียน", dir_title)
 
 
+def _replace_para_text(para: Any, text: str, font_name: str = "TH SarabunPSK", size_pt: float = 16.0, bold: bool = False) -> None:
+    for r in list(para.runs):
+        r._element.getparent().remove(r._element)
+    run = para.add_run(text)
+    _apply_font(run, font_name=font_name, size_pt=size_pt, bold=bold)
+
+
+def _remove_paragraph(para: Any) -> None:
+    el = para._element
+    parent = el.getparent()
+    if parent is not None:
+        parent.remove(el)
+
+
+def _build_repair_request_doc(payload: dict[str, Any], org_profile: dict[str, Any]) -> docx.Document:
+    tpl_path = resolve_system_template("repair_request.docx")
+    doc = docx.Document(str(tpl_path))
+    paras = doc.paragraphs
+
+    org_name = org_profile.get("organization_name") or "วิทยาลัยการอาชีพเชียงราย"
+    doc_no = str(payload.get("doc_number") or "").strip()
+    be_year = to_thai_digits(str(current_buddhist_year()))
+    doc_no_text = to_thai_digits(doc_no) if doc_no else f"ฝบ.             /{be_year}"
+    doc_date = format_thai_date(payload.get("doc_date"))
+
+    # Paragraph 2: ส่วนราชการ
+    if len(paras) > 2:
+        _replace_para_text(paras[2], f"ส่วนราชการ  งานอาคารสถานที่ ฝ่ายบริหารทรัพยากร {org_name}", size_pt=16.0, bold=False)
+
+    # Paragraph 3: ที่ ... วันที่ ...
+    if len(paras) > 3:
+        _replace_para_text(paras[3], f"ที่  {doc_no_text}\tวันที่  {doc_date}", size_pt=16.0, bold=False)
+
+    # Paragraph 4: เรื่อง ขอแจ้งซ่อมบำรุง + Checkboxes
+    cats = set(payload.get("categories") or [])
+    other_txt = str(payload.get("other_category_text") or "").strip()
+    cat_labels = ["ครุภัณฑ์", "ระบบไฟฟ้า-ประปา", "สาธารณูปโภค", "อาคารสิ่งก่อสร้าง"]
+    marks = [f"{'☑' if c in cats else '☐'} {c}" for c in cat_labels]
+    other_mark = "☑" if ("อื่นๆ" in cats or other_txt) else "☐"
+    other_fill = other_txt if other_txt else "...................................................................................................................."
+    if len(paras) > 4:
+        _replace_para_text(
+            paras[4],
+            f"เรื่อง  ขอแจ้งซ่อมบำรุง  {'  '.join(marks)}\n\t  {other_mark} อื่นๆ {other_fill}",
+            size_pt=16.0,
+            bold=False,
+        )
+
+    # Paragraph 5: เรียน
+    dir_title = (org_profile.get("director") or {}).get("title") or f"ผู้อำนวยการ{org_name}"
+    if len(paras) > 5:
+        _replace_para_text(paras[5], f"เรียน  {dir_title}", size_pt=16.0, bold=False)
+
+    # Paragraph 6: ด้วย แผนก/งาน ... ฝ่าย ...
+    dept = str(payload.get("department_name") or "").strip() or "................................................................"
+    div_name = str(payload.get("division_name") or "").strip() or "....................................................."
+    if len(paras) > 6:
+        _replace_para_text(
+            paras[6],
+            f"\tด้วย แผนก/งาน {dept}  ฝ่าย {div_name}\nมีความประสงค์ที่จะขอแจ้งปรับปรุงซ่อมแซม/ซ่อมบำรุง โดยมีรายละเอียดเบื้องต้นดังนี้",
+            size_pt=16.0,
+            bold=False,
+        )
+
+    # Table 0: 6-column repair items table
+    items = payload.get("items") or []
+    if doc.tables:
+        tbl = doc.tables[0]
+        # Ensure enough data rows (template has 1 header + 5 data rows)
+        while len(tbl.rows) < 1 + max(5, len(items)):
+            tbl.add_row()
+        for r_idx in range(1, len(tbl.rows)):
+            item = items[r_idx - 1] if r_idx - 1 < len(items) else None
+            row_cells = tbl.rows[r_idx].cells
+            if item and any(str(item.get(k) or "").strip() for k in ("description", "cause", "location")):
+                vals = [
+                    (to_thai_digits(str(r_idx)), WD_ALIGN_PARAGRAPH.CENTER),
+                    (str(item.get("description") or "-"), WD_ALIGN_PARAGRAPH.LEFT),
+                    (str(item.get("cause") or "-"), WD_ALIGN_PARAGRAPH.LEFT),
+                    (to_thai_digits(str(item.get("quantity") or "")), WD_ALIGN_PARAGRAPH.CENTER),
+                    (str(item.get("unit") or ""), WD_ALIGN_PARAGRAPH.CENTER),
+                    (str(item.get("location") or "-"), WD_ALIGN_PARAGRAPH.LEFT),
+                ]
+            else:
+                vals = [("", WD_ALIGN_PARAGRAPH.CENTER)] * 6
+            for c_idx, (val, al) in enumerate(vals):
+                _set_cell(row_cells[c_idx], val, align=al, size_pt=15.0)
+
+    # Signatures: requester & deputy_resource
+    requester = str(payload.get("requester_name") or "").strip() or "                                        "
+    requester_title = str(payload.get("requester_title") or "").strip() or "ตำแหน่งผู้แจ้ง"
+    deputy_name = str(payload.get("deputy_resource_name") or "").strip() or "นางสาวอรวรรณ แสงดาว"
+    deputy_title = str(payload.get("deputy_resource_title") or "").strip() or "รองผู้อำนวยการฝ่ายบริหารทรัพยากร"
+    sigs = payload.get("signatures") if isinstance(payload.get("signatures"), dict) else {}
+    req_sig = _resolve_sig(sigs.get("requester"))
+
+    if req_sig and len(paras) > 10:
+        paras[10].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        paras[10].add_run().add_picture(str(req_sig), width=Cm(3.0))
+    if len(paras) > 11:
+        _replace_para_text(paras[11], f"\t\t({requester})", size_pt=16.0)
+    if len(paras) > 12:
+        _replace_para_text(paras[12], f"\t\t\t\t\t\t\t{requester_title}", size_pt=16.0)
+    if len(paras) > 16:
+        _replace_para_text(paras[16], f"\t\t({deputy_name})", size_pt=16.0)
+    if len(paras) > 17:
+        _replace_para_text(paras[17], f"\t\t\t\t\t   {deputy_title}", size_pt=16.0)
+
+    # Page 2: Photo attachment page
+    photos = [p for p in (payload.get("photos") or []) if isinstance(p, dict) and p.get("filename")][:4]
+    include_photo_page = bool(payload.get("include_photo_page", True)) or bool(photos)
+
+    if not include_photo_page:
+        for p in list(paras[18:]):
+            _remove_paragraph(p)
+    elif photos:
+        # Clear blank placeholder lines after heading (paras[35]) and insert 2x2 photo grid
+        for p in list(paras[36:]):
+            _remove_paragraph(p)
+        photo_tbl = doc.add_table(rows=2, cols=2)
+        photo_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+        for idx, ph in enumerate(photos):
+            r_i, c_i = divmod(idx, 2)
+            cell = photo_tbl.rows[r_i].cells[c_i]
+            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            img_path = ATTACHMENTS_DIR / Path(str(ph["filename"])).name
+            if img_path.exists():
+                cell.paragraphs[0].add_run().add_picture(str(img_path), width=Cm(7.5))
+            cap_p = cell.add_paragraph()
+            cap_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            _apply_font(cap_p.add_run(str(ph.get("caption") or f"รูปที่ {to_thai_digits(str(idx + 1))}")), font_name="TH SarabunPSK", size_pt=14.0)
+        _style_grid(photo_tbl, [8.2, 8.2])
+
+    return doc
+
+
 def generate_division_form(
     form_type: str,
     payload: dict[str, Any],
@@ -260,6 +397,20 @@ def generate_division_form(
         raise ValueError(f"Unsupported division form_type: {form_type}")
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    if form_type == "repair_request":
+        doc = _build_repair_request_doc(payload, org_profile)
+        docx_path = out_dir / f"{prefix}_{form_type}.docx"
+        doc.save(docx_path)
+        pdf_path = convert_office_to_pdf(docx_path, out_dir) if convert_pdf else None
+        png_paths = render_pdf_pages_to_png(pdf_path, out_dir, prefix=f"{prefix}_{form_type}") if pdf_path else []
+        return {
+            "form_type": form_type,
+            "title": FORM_TITLES[form_type],
+            "docx_path": docx_path,
+            "pdf_path": pdf_path,
+            "png_paths": png_paths,
+        }
+
     doc = _new_a4_doc()
     org_name = org_profile.get("organization_name") or "วิทยาลัยการอาชีพเชียงราย"
     dir_name = (org_profile.get("director") or {}).get("name") or "................................................"

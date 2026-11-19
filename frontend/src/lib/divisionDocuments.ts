@@ -3,6 +3,7 @@ export type DivisionKey = "resource" | "academic" | "development" | "planning";
 export type DivisionFormSlug =
   | "vehicle_request"
   | "official_travel"
+  | "repair_request"
   | "overload_teaching"
   | "internship_supervision"
   | "home_visit"
@@ -47,7 +48,7 @@ export const DIVISION_GROUPS: DivisionGroupDef[] = [
       { id: "vehicle_request", label: "ขอใช้รถ", subtitle: "แบบขออนุญาตใช้รถยนต์ราชการและผู้ร่วมเดินทาง", kind: "form", href: "/forms/vehicle_request", formSlug: "vehicle_request" },
       { id: "sp_bundle", label: "ชุดจัดซื้อ", subtitle: "สผ.1 · แผนฝึก · TOR · ใบสั่งซื้อชั่วคราว", kind: "existing", href: "/procurement" },
       { id: "official_travel", label: "ขอไปราชการ", subtitle: "ขออนุญาตไปราชการและประมาณการค่าใช้จ่าย", kind: "form", href: "/forms/official_travel", formSlug: "official_travel" },
-      { id: "repair_system", label: "แจ้งซ่อม", subtitle: "เชื่อมโยงระบบแจ้งซ่อมบำรุงอาคาร/ครุภัณฑ์", kind: "external", externalKey: "repair_system_url" },
+      { id: "repair_request", label: "แจ้งซ่อม", subtitle: "บันทึกข้อความแจ้งซ่อมบำรุงอาคาร/ครุภัณฑ์ (งานอาคารสถานที่)", kind: "form", href: "/forms/repair_request", formSlug: "repair_request" },
       { id: "short_course", label: "ระบบสมัครระยะสั้น", subtitle: "เชื่อมโยงระบบรับสมัครหลักสูตรวิชาชีพระยะสั้น", kind: "external", externalKey: "short_course_url" },
     ],
   },
@@ -110,6 +111,12 @@ export const DIVISION_FORM_META: Record<
     divisionCode: "ฝบ.",
     divisionName: "ฝ่ายบริหารทรัพยากร",
     description: "สร้างแบบขออนุญาตเดินทางไปราชการ รายชื่อผู้เดินทาง และประมาณการค่าใช้จ่าย",
+  },
+  repair_request: {
+    title: "บันทึกข้อความแจ้งซ่อมบำรุง (งานอาคารสถานที่)",
+    divisionCode: "ฝบ.",
+    divisionName: "ฝ่ายบริหารทรัพยากร",
+    description: "ร่างบันทึกข้อความแจ้งปรับปรุงซ่อมแซม ครุภัณฑ์ ไฟฟ้า-ประปา อาคารสถานที่ พร้อมแนบรูปภาพ 4 รูป",
   },
   overload_teaching: {
     title: "ขอเบิกค่าสอนเกินภาระงาน",
