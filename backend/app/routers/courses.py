@@ -22,7 +22,9 @@ from app.routers.ai import _resolve_provider_config
 from app.routers.auth import resolve_current_user
 from app.services.timetable_parser import (
     build_timetable_template_xlsx,
+    extract_timetable_metadata,
     normalize_course_item,
+    parse_cric_pdf_timetable,
     parse_csv_or_text_timetable,
     parse_html_sornor02,
     parse_xlsx_timetable,
@@ -202,21 +204,25 @@ async def parse_timetable(
         if fname.endswith(".pdf"):
             pdf_text = _extract_pdf_text(content)
             if pdf_text.strip():
-                items, warnings = parse_csv_or_text_timetable(pdf_text, default_semester)
+                items, meta, warnings = parse_cric_pdf_timetable(pdf_text, default_semester)
                 if items:
-                    return {"items": items, "source": "pdf_text", "warnings": warnings}
+                    return {"items": items, "metadata": meta, "source": "pdf_text", "warnings": warnings}
             items = await _extract_timetable_via_gemini(content, "application/pdf", default_semester)
-            return {"items": items, "source": "ai_vision", "warnings": warnings}
+            return {"items": items, "metadata": {}, "source": "ai_vision", "warnings": warnings}
         if fname.endswith((".png", ".jpg", ".jpeg", ".webp")):
             mime = file.content_type or ("image/png" if fname.endswith(".png") else "image/jpeg")
             items = await _extract_timetable_via_gemini(content, mime, default_semester)
-            return {"items": items, "source": "ai_vision", "warnings": warnings}
+            return {"items": items, "metadata": {}, "source": "ai_vision", "warnings": warnings}
         raise HTTPException(status_code=400, detail="รองรับเฉพาะไฟล์ .xlsx, .csv, .html, .pdf, .png, .jpg, .webp")
 
     if raw_text.strip():
+        if "คาบเรียน" in raw_text and "เวลาเรียน" in raw_text and "รหัสวิชา" in raw_text:
+            items, meta, warnings = parse_cric_pdf_timetable(raw_text, default_semester)
+            return {"items": items, "metadata": meta, "source": "cric_pdf_text", "warnings": warnings}
         items, warnings = parse_csv_or_text_timetable(raw_text, default_semester)
+        meta = extract_timetable_metadata(raw_text)
         source = "sornor02_html" if ("<table" in raw_text.lower() or "<tr" in raw_text.lower()) else "text"
-        return {"items": items, "source": source, "warnings": warnings}
+        return {"items": items, "metadata": meta, "source": source, "warnings": warnings}
 
     raise HTTPException(status_code=400, detail="กรุณาอัปโหลดไฟล์ตารางสอน หรือวางข้อความจากตาราง/ศธ.02")
 

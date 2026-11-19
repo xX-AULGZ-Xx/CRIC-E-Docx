@@ -14,7 +14,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { api, CourseRecord, TimetableParsedItem } from "@/lib/api";
+import { api, CourseRecord, TimetableMetadata, TimetableParsedItem } from "@/lib/api";
 import { toastError, toastInfo, toastSuccess } from "@/lib/swal";
 
 type ImportMode = "file_text" | "scan_pdf" | "sornor02_web";
@@ -26,7 +26,8 @@ interface TimetableImportPanelProps {
     importedItems: TimetableParsedItem[],
     savedCourses: CourseRecord[],
     allCourses: CourseRecord[],
-    skippedCount: number
+    skippedCount: number,
+    metadata?: TimetableMetadata
   ) => void;
 }
 
@@ -57,6 +58,8 @@ export function TimetableImportPanel({
   const [parsing, setParsing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [previewItems, setPreviewItems] = useState<TimetableParsedItem[]>([]);
+  const [parsedMeta, setParsedMeta] = useState<TimetableMetadata | null>(null);
+  const [applyMetadata, setApplyMetadata] = useState(true);
   const [warnings, setWarnings] = useState<string[]>([]);
 
   useEffect(() => {
@@ -78,7 +81,8 @@ export function TimetableImportPanel({
       if (rawText.trim()) fd.append("raw_text", rawText.trim());
       fd.append("default_semester", defaultSemester || "2/2569");
       const res = await api.parseTimetable(fd);
-      setPreviewItems(res.items.map((it) => ({ ...it, selected: true })));
+      setPreviewItems(res.items.map((it) => ({ ...it, selected: it.selected !== false })));
+      setParsedMeta(res.metadata && Object.keys(res.metadata).length > 0 ? res.metadata : null);
       setWarnings(res.warnings || []);
       if (res.items.length > 0) {
         toastSuccess(`วิเคราะห์ตารางสำเร็จ พบ ${res.items.length} รายวิชา`);
@@ -104,7 +108,8 @@ export function TimetableImportPanel({
       fd.append("file", scanFile);
       fd.append("default_semester", defaultSemester || "2/2569");
       const res = await api.parseTimetable(fd);
-      setPreviewItems(res.items.map((it) => ({ ...it, selected: true })));
+      setPreviewItems(res.items.map((it) => ({ ...it, selected: it.selected !== false })));
+      setParsedMeta(res.metadata && Object.keys(res.metadata).length > 0 ? res.metadata : null);
       setWarnings(res.warnings || []);
       if (res.items.length > 0) {
         toastSuccess(`สแกนตารางสำเร็จ พบ ${res.items.length} รายวิชา`);
@@ -178,8 +183,9 @@ export function TimetableImportPanel({
     setImporting(true);
     try {
       const res = await api.importCourses(chosen);
-      onImportSuccess(chosen, res.imported, res.courses, res.skipped_count);
+      onImportSuccess(chosen, res.imported, res.courses, res.skipped_count, applyMetadata && parsedMeta ? parsedMeta : undefined);
       setPreviewItems([]);
+      setParsedMeta(null);
       setSelectedFile(null);
       setScanFile(null);
       setRawText("");
@@ -443,6 +449,31 @@ export function TimetableImportPanel({
             </div>
           )}
 
+          {/* Detected Header Metadata Banner */}
+          {parsedMeta && (
+            <div className="rounded-md border border-blue-200 bg-[#EFF6FF] p-3 text-[11px] text-[#1E3A8A]">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-bold">ข้อมูลหัวตารางและผู้ลงนามที่ตรวจพบจากไฟล์</span>
+                <label className="inline-flex cursor-pointer items-center gap-1.5 font-semibold">
+                  <input
+                    type="checkbox"
+                    checked={applyMetadata}
+                    onChange={(e) => setApplyMetadata(e.target.checked)}
+                  />
+                  เติมข้อมูลหัวตารางและผู้ลงนามเข้า Tab 1–4 ด้วย
+                </label>
+              </div>
+              <div className="mt-1.5 grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
+                {parsedMeta.semester && <div>• ภาคเรียน: <strong>{parsedMeta.semester}</strong></div>}
+                {parsedMeta.instructor_name && <div>• ผู้สอน: <strong>{parsedMeta.instructor_name}</strong></div>}
+                {parsedMeta.department_name && <div>• แผนกวิชา: <strong>{parsedMeta.department_name}</strong></div>}
+                {parsedMeta.major_name && <div>• สาขาวิชา: <strong>{parsedMeta.major_name}</strong></div>}
+                {parsedMeta.curriculum_head_name && <div>• หัวหน้างานหลักสูตรฯ: <strong>{parsedMeta.curriculum_head_name}</strong></div>}
+                {parsedMeta.deputy_academic_name && <div>• รองฯ ฝ่ายวิชาการ: <strong>{parsedMeta.deputy_academic_name}</strong></div>}
+              </div>
+            </div>
+          )}
+
           {/* Editable Preview Table */}
           {previewItems.length > 0 && (
             <div className="space-y-2">
@@ -450,33 +481,45 @@ export function TimetableImportPanel({
                 <h3 className="font-bold text-[#0F172A]">
                   ตารางพรีวิว ({previewItems.filter((i) => i.selected !== false).length} / {previewItems.length} วิชาที่เลือก)
                 </h3>
-                <button
-                  type="button"
-                  onClick={addEmptyRow}
-                  className="inline-flex items-center gap-1 rounded border border-[#CBD5E1] bg-white px-2 py-1 text-[11px] font-semibold text-[#0F172A] hover:bg-slate-50"
-                >
-                  <Plus className="h-3 w-3" /> เพิ่มแถวเอง
-                </button>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPreviewItems((prev) => prev.map((it) => ({ ...it, selected: !it.is_special })))
+                    }
+                    className="inline-flex items-center gap-1 rounded border border-[#CBD5E1] bg-white px-2 py-1 text-[11px] font-semibold text-[#0F172A] hover:bg-slate-50"
+                  >
+                    เลือกเฉพาะวิชาสอน (ไม่รวม PLC/กิจกรรม)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={addEmptyRow}
+                    className="inline-flex items-center gap-1 rounded border border-[#CBD5E1] bg-white px-2 py-1 text-[11px] font-semibold text-[#0F172A] hover:bg-slate-50"
+                  >
+                    <Plus className="h-3 w-3" /> เพิ่มแถวเอง
+                  </button>
+                </div>
               </div>
 
               <div className="overflow-x-auto rounded-md border border-[#CBD5E1]">
-                <table className="w-full min-w-[780px] border-collapse text-left text-[11px]">
+                <table className="w-full min-w-[860px] border-collapse text-left text-[11px]">
                   <thead className="bg-[#F1F5F9] text-[#0F172A]">
                     <tr>
                       <th className="w-8 border-b border-[#CBD5E1] px-2 py-1.5 text-center">เลือก</th>
-                      <th className="w-28 border-b border-[#CBD5E1] px-2 py-1.5">รหัสวิชา</th>
+                      <th className="w-32 border-b border-[#CBD5E1] px-2 py-1.5">รหัสวิชา</th>
                       <th className="border-b border-[#CBD5E1] px-2 py-1.5">ชื่อวิชา</th>
                       <th className="w-36 border-b border-[#CBD5E1] px-2 py-1.5">หน่วยกิต</th>
                       <th className="w-20 border-b border-[#CBD5E1] px-2 py-1.5">ระดับ</th>
-                      <th className="w-24 border-b border-[#CBD5E1] px-2 py-1.5">กลุ่มเรียน</th>
+                      <th className="w-24 border-b border-[#CBD5E1] px-2 py-1.5">ระบบ</th>
+                      <th className="w-36 border-b border-[#CBD5E1] px-2 py-1.5">กลุ่มเรียน</th>
                       <th className="w-16 border-b border-[#CBD5E1] px-2 py-1.5">นร.</th>
-                      <th className="w-40 border-b border-[#CBD5E1] px-2 py-1.5">วัน-เวลา / ห้อง</th>
+                      <th className="w-44 border-b border-[#CBD5E1] px-2 py-1.5">วัน-เวลา / ห้อง</th>
                       <th className="w-10 border-b border-[#CBD5E1] px-2 py-1.5 text-center">ลบ</th>
                     </tr>
                   </thead>
                   <tbody>
                     {previewItems.map((it, idx) => (
-                      <tr key={idx} className="border-b border-[#E2E8F0] last:border-b-0">
+                      <tr key={idx} className={`border-b border-[#E2E8F0] last:border-b-0 ${it.is_special ? "bg-amber-50/40" : ""}`}>
                         <td className="px-2 py-1 text-center">
                           <input
                             type="checkbox"
@@ -491,6 +534,11 @@ export function TimetableImportPanel({
                             onChange={(e) => updateItem(idx, { course_code: e.target.value })}
                             className="ledger-input w-full py-1 text-[11px]"
                           />
+                          {it.is_special && (
+                            <span className="mt-0.5 inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                              กิจกรรม/PLC
+                            </span>
+                          )}
                         </td>
                         <td className="px-1.5 py-1">
                           <input
@@ -516,6 +564,18 @@ export function TimetableImportPanel({
                           >
                             <option value="ปวช.">ปวช.</option>
                             <option value="ปวส.">ปวส.</option>
+                          </select>
+                        </td>
+                        <td className="px-1.5 py-1">
+                          <select
+                            value={it.system_type || "ปกติ"}
+                            onChange={(e) =>
+                              updateItem(idx, { system_type: e.target.value === "ทวิภาคี" ? "ทวิภาคี" : "ปกติ" })
+                            }
+                            className="ledger-input w-full py-1 text-[11px]"
+                          >
+                            <option value="ปกติ">ปกติ</option>
+                            <option value="ทวิภาคี">ทวิภาคี</option>
                           </select>
                         </td>
                         <td className="px-1.5 py-1">

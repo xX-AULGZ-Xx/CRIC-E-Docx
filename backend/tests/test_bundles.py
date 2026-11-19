@@ -610,3 +610,80 @@ def test_timetable_template_parse_sornor02_and_batch_import(monkeypatch):
     assert imp2.status_code == 200
     assert len(imp2.json()["imported"]) == 0
     assert imp2.json()["skipped_count"] == 1
+
+
+def test_cric_pdf_timetable_parser_and_metadata():
+    headers = {"X-User-Email": "academic@cric.ac.th"}
+    cric_pdf_text = """
+วิทยาลัยการอาชีพเชียงราย
+ภาคเรียน 2/2569
+ผู้สอน นายณัฐพงศ์ มะโนวัง
+แผนกวิชา เทคโนโลยีธุรกิจดิจิทัล
+รหัสวิชา ชื่อรายวิชา ท. ป. น. ช.
+21910-2013 ระบบเครือข่ายคอมพิวเตอร\uf70e 1 3 2 8
+31910-2022 การพัฒนาโปรแกรมบนอุปกรณ์เคลื่อนที่แบบพกพา 2 2 3 4
+PLC ชุมชนการเรียนรู้ทางวิชาชีพ (PLC) 2
+วันจันทร์ 31910-2022
+2205
+เทคโนโลยีฯ.ปวส1/1,เทคโนโลยีฯ.ปวส1/2 (ม.6)
+วันอังคาร 21910-2013 21910-2013
+2204 สถานประกอบการ
+เทคโนโลยีฯ.ปวช.3 เทคโนโลยีฯ.ปวช.1/2 (ทวิภาคี)
+วันพุธ 21910-2013
+สถานประกอบการ
+เทคโนโลยีฯ.ปวช.1/2 (ทวิภาคี)
+(นายจักรพันธ์ พัวพันพัฒนา) (นางสาวยุพิน ศิริขันแก้ว)
+หัวหน้างานพัฒนาหลักสูตรฯ รองผู้อำนวยการฝ่ายวิชาการ
+ตารางสอนภาคเรียนที่ 2 ปีการศึกษา 2569
+สาขาวิชา เทคโนโลยีสารสนเทศ
+21910-2013 ระบบเครือข่ายคอมพิวเตอร์ 1-3-2
+31910-2022 การพัฒนาโปรแกรมบนอุปกรณ์เคลื่อนที่แบบพกพา 2-2-3
+วัน คาบเรียน เวลาเรียน กลุ่มเรียน รหัสวิชา ชื่อวิชา ห้อง ใน นอก
+จันทร์ 1 - 4 08:10 - 12:10 693191001 31910-2022 การพัฒนาโปรแกรมบนอุปกรณ์เคลื่อนที่แบบพ
+กพา ห้องปฏิบัติการคอมพิว
+เตอร์กราฟิก - -
+จันทร์ 1 - 4 08:10 - 12:10 693191002 31910-2022 การพัฒนาโปรแกรมบนอุปกรณ์เคลื่อนที่แบบพ
+กพา ห้องปฏิบัติการคอมพิว
+เตอร์กราฟิก - -
+จันทร์ 11 - 12 19:00 - 21:00 PLC ชุมชนการเรียนรู้ทางวิชาชีพ (PLC) - -
+อังคาร 1 - 4 08:10 - 12:10 672191001 21910-2013 ระบบเครือข่ายคอมพิวเตอร์ ห้องปฏิบัติการเครือข่า
+ยคอมพิวเตอร์ - -
+อังคาร 11 - 12 19:00 - 21:00 692191002 21910-2013 ระบบเครือข่ายคอมพิวเตอร์ สถานประกอบการ - -
+พุธ 11 - 12 19:00 - 21:00 692191002 21910-2013 ระบบเครือข่ายคอมพิวเตอร์ สถานประกอบการ - -
+รวมชั่วโมงสอนในเวลา 0 รวมชั่วโมงสอนนอกเวลา 0 รวมจำนวนชั่วโมงที่สอน 43
+"""
+    res = client.post(
+        "/v1/courses/parse-timetable",
+        headers=headers,
+        data={"raw_text": cric_pdf_text, "default_semester": "2/2569"},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    meta = body["metadata"]
+    assert meta["semester"] == "2/2569"
+    assert meta["instructor_name"] == "นายณัฐพงศ์ มะโนวัง"
+    assert meta["department_name"] == "เทคโนโลยีธุรกิจดิจิทัล"
+    assert meta["major_name"] == "เทคโนโลยีสารสนเทศ"
+    assert meta["curriculum_head_name"] == "นายจักรพันธ์ พัวพันพัฒนา"
+    assert meta["deputy_academic_name"] == "นางสาวยุพิน ศิริขันแก้ว"
+
+    items = body["items"]
+    # 31910-2022 (merged 2 co-taught groups), PLC (special), 21910-2013 (regular 672191001), 21910-2013 (ทวิภาคี 692191002)
+    assert len(items) == 4
+    mob = next(i for i in items if i["course_code"] == "31910-2022")
+    assert "693191001" in mob["student_group"] and "693191002" in mob["student_group"]
+    assert mob["system_type"] == "ปกติ"
+    assert mob["selected"] is True
+
+    plc = next(i for i in items if i["course_code"] == "PLC")
+    assert plc["is_special"] is True
+    assert plc["selected"] is False
+
+    net_items = [i for i in items if i["course_code"] == "21910-2013"]
+    assert len(net_items) == 2
+    reg = next(i for i in net_items if "672191001" in i["student_group"])
+    assert reg["system_type"] == "ปกติ"
+    assert "ทวิภาคี" not in reg["student_group"]
+    dve = next(i for i in net_items if "692191002" in i["student_group"])
+    assert dve["system_type"] == "ทวิภาคี"
+    assert "อังคาร" in dve["schedule_text"] and "พุธ" in dve["schedule_text"]

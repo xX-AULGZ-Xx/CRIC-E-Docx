@@ -35,6 +35,42 @@ THAI_DAYS = [
 ]
 
 
+THAI_PUA_MAP = {
+    "\uf700": "\u0e10",  # ฐ
+    "\uf701": "\u0e34",  # ิ
+    "\uf702": "\u0e35",  # ี
+    "\uf703": "\u0e36",  # ึ
+    "\uf704": "\u0e37",  # ื
+    "\uf705": "\u0e48",  # ่
+    "\uf706": "\u0e49",  # ้
+    "\uf707": "\u0e4a",  # ๊
+    "\uf708": "\u0e4b",  # ๋
+    "\uf709": "\u0e4c",  # ์
+    "\uf70a": "\u0e48",  # ่
+    "\uf70b": "\u0e49",  # ้
+    "\uf70c": "\u0e4a",  # ๊
+    "\uf70d": "\u0e4b",  # ๋
+    "\uf70e": "\u0e4c",  # ์
+    "\uf70f": "\u0e0d",  # ญ
+    "\uf710": "\u0e31",  # ั
+    "\uf711": "\u0e4d",  # ํ
+    "\uf712": "\u0e47",  # ็
+    "\uf713": "\u0e48",  # ่
+    "\uf714": "\u0e49",  # ้
+    "\uf715": "\u0e4a",  # ๊
+    "\uf716": "\u0e4b",  # ๋
+    "\uf717": "\u0e4c",  # ์
+    "\uf718": "\u0e38",  # ุ
+    "\uf719": "\u0e39",  # ู
+    "\uf71a": "\u0e3a",  # ฺ
+}
+_THAI_PUA_TRANS = str.maketrans(THAI_PUA_MAP)
+
+
+def _normalize_thai_pua(text: str) -> str:
+    return text.translate(_THAI_PUA_TRANS)
+
+
 def _safe_int(val: Any, default: int = 0) -> int:
     if val is None or val == "":
         return default
@@ -77,6 +113,11 @@ def normalize_course_item(raw: dict[str, Any], default_semester: str = "2/2569")
     level = str(raw.get("curriculum_level") or "").strip() or _infer_level(code, f"{name} {student_group}")
     semester = str(raw.get("semester") or "").strip() or default_semester
     total_students = max(0, _safe_int(raw.get("total_students"), 0))
+    system_type = str(raw.get("system_type") or "").strip()
+    if system_type not in ("ปกติ", "ทวิภาคี"):
+        system_type = "ทวิภาคี" if ("ทวิภาคี" in student_group or "ทวิภาคี" in schedule_text) else "ปกติ"
+    is_special = bool(raw.get("is_special")) or code.upper() == "PLC" or code.startswith("20000-")
+    selected = bool(raw["selected"]) if "selected" in raw else (not is_special)
 
     return {
         "course_code": code,
@@ -91,7 +132,9 @@ def normalize_course_item(raw: dict[str, Any], default_semester: str = "2/2569")
         "schedule_text": schedule_text,
         "room": room,
         "semester": semester,
-        "selected": True,
+        "system_type": system_type,
+        "is_special": is_special,
+        "selected": selected,
     }
 
 
@@ -542,3 +585,254 @@ def build_timetable_template_xlsx() -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+DETAIL_ROW_RE = re.compile(
+    r"^\s*(จันทร์|อังคาร|พุธ|พฤหัสบดี|ศุกร์|เสาร์|อาทิตย์)\s+"
+    r"(\d+\s*-\s*\d+|\d+)\s+"
+    r"(\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2})\s+"
+    r"(?:(\d{9})\s+)?"
+    r"(\d{5}-\d{4}|PLC)\b(.*)$"
+)
+SUMMARY_TPN_RE = re.compile(r"\b(\d{5}-\d{4})\s+(.+?)\s+(\d+)-(\d+)-(\d+)\b")
+SUMMARY_4COL_RE = re.compile(r"\b(\d{5}-\d{4})\s+(.+?)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\b")
+READABLE_GROUP_RE = re.compile(r"((?:เทคโนโลยีฯ\.?|ปวช\.?|ปวส\.?)[^\n]*?(?:ปวช|ปวส)[^\n]*)", re.IGNORECASE)
+
+
+def extract_timetable_metadata(raw_text: str) -> dict[str, str]:
+    text = _normalize_thai_pua(raw_text)
+    meta: dict[str, str] = {}
+
+    sem_m = re.search(r"ภาคเรียน\s+(\d/\d{4})", text)
+    if not sem_m:
+        sem_m2 = re.search(r"ตารางสอนภาคเรียนที่\s*(\d)\s+ปีการศึกษา\s*(\d{4})", text)
+        if sem_m2:
+            meta["semester"] = f"{sem_m2.group(1)}/{sem_m2.group(2)}"
+    else:
+        meta["semester"] = sem_m.group(1)
+
+    inst_m = re.search(r"(?:ชื่อ)?ผู้สอน\s+([^\n\r]+?)(?:\s{2,}|วุฒิการศึกษา|รหัสวิชา|$)", text, re.MULTILINE)
+    if inst_m:
+        meta["instructor_name"] = re.sub(r"\s+", " ", inst_m.group(1)).strip()
+
+    dept_m = re.search(r"แผนกวิชา\s+([^\n\r]+?)(?:\s{2,}|สาขาวิชา|วุฒิการศึกษา|รหัสวิชา|$)", text, re.MULTILINE)
+    if dept_m:
+        meta["department_name"] = re.sub(r"\s+", " ", dept_m.group(1)).strip()
+
+    major_m = re.search(r"สาขาวิชา\s+([^\n\r]+?)(?:\s{2,}|วุฒิการศึกษา|รหัสวิชา|$)", text, re.MULTILINE)
+    if major_m:
+        meta["major_name"] = re.sub(r"\s+", " ", major_m.group(1)).strip()
+
+    # Extract signer names (parenthesized Thai names near role titles)
+    paren_names = list(re.finditer(r"\(((?:นาย|นางสาว|นาง)[^\)]{4,50})\)", text))
+    for m in paren_names:
+        name = re.sub(r"\s+", " ", m.group(1)).strip()
+        ctx = text[max(0, m.start() - 40) : min(len(text), m.end() + 140)]
+        if "หัวหน้างานพัฒนาหลักสูตร" in ctx and "curriculum_head_name" not in meta:
+            meta["curriculum_head_name"] = name
+        elif "รองผู้อำนวยการฝ่ายวิชาการ" in ctx and "deputy_academic_name" not in meta:
+            meta["deputy_academic_name"] = name
+        elif "ผู้อำนวยการ" in ctx and "director_name" not in meta:
+            meta["director_name"] = name
+
+    return meta
+
+
+def _clean_readable_group(raw_group: str) -> str:
+    txt = re.sub(r"\s+", " ", raw_group).strip()
+    txt = txt.replace("เทคโนโลยีฯ.", "").replace("เทคโนโลยีฯ", "").strip(" .")
+    # Remove trailing truncated word like ",ปว.."
+    txt = re.sub(r",?\s*ปว\.{1,2}$", "", txt).strip(" ,")
+    return txt
+
+
+def parse_cric_pdf_timetable(
+    pdf_text: str, default_semester: str = "2/2569"
+) -> tuple[list[dict[str, Any]], dict[str, str], list[str]]:
+    text = _normalize_thai_pua(pdf_text)
+    meta = extract_timetable_metadata(text)
+    sem = meta.get("semester") or default_semester
+    warnings: list[str] = []
+
+    # 1. Build course summary map (code -> {course_name, t_hours, p_hours, credit_num})
+    summary_map: dict[str, dict[str, Any]] = {}
+    for m in SUMMARY_4COL_RE.finditer(text):
+        code, name, t, p, c, _h = m.groups()
+        summary_map[code] = {
+            "course_name": re.sub(r"\s+", " ", name).strip(),
+            "t_hours": int(t),
+            "p_hours": int(p),
+            "credit_num": int(c),
+        }
+    for m in SUMMARY_TPN_RE.finditer(text):
+        code, name, t, p, c = m.groups()
+        clean_name = re.sub(r"\s+", " ", name).strip()
+        prev = summary_map.get(code, {})
+        summary_map[code] = {
+            "course_name": clean_name if len(clean_name) >= len(prev.get("course_name", "")) else prev["course_name"],
+            "t_hours": int(t),
+            "p_hours": int(p),
+            "credit_num": int(c),
+        }
+    if re.search(r"\bPLC\b", text):
+        summary_map.setdefault(
+            "PLC",
+            {"course_name": "ชุมชนการเรียนรู้ทางวิชาชีพ (PLC)", "t_hours": 0, "p_hours": 2, "credit_num": 0},
+        )
+
+    # 2. Scan Page 1 Grid for readable group hints keyed by (course_code, day)
+    grid_hints: dict[tuple[str, str], list[str]] = {}
+    lines = text.splitlines()
+    current_grid_day = ""
+    for i, ln in enumerate(lines):
+        # Stop scanning grid once we hit the detail table header on page 2
+        if "คาบเรียน" in ln and "เวลาเรียน" in ln and "กลุ่มเรียน" in ln:
+            break
+        day_m = re.match(r"^\s*วัน(จันทร์|อังคาร|พุธ|พฤหัสบดี|ศุกร์|เสาร์|อาทิตย์)\b", ln)
+        if day_m:
+            current_grid_day = day_m.group(1)
+        if current_grid_day:
+            for code_m in re.finditer(r"\b(\d{5}-\d{4}|PLC)\b", ln):
+                code = code_m.group(1)
+                window = "\n".join(lines[i : min(len(lines), i + 5)])
+                g_m = READABLE_GROUP_RE.search(window)
+                if g_m:
+                    for seg in re.split(r"(?=เทคโนโลยีฯ)", g_m.group(1)):
+                        hint = _clean_readable_group(seg)
+                        if hint and ("ปวช" in hint or "ปวส" in hint):
+                            grid_hints.setdefault((code, current_grid_day), [])
+                            if hint not in grid_hints[(code, current_grid_day)]:
+                                grid_hints[(code, current_grid_day)].append(hint)
+
+    # 3. Parse Page 2 detail table rows (supporting wrapped course_name and room lines)
+    detail_rows: list[dict[str, Any]] = []
+    in_detail = False
+    current_row: dict[str, Any] | None = None
+
+    for ln in lines:
+        if "คาบเรียน" in ln and "เวลาเรียน" in ln and "รหัสวิชา" in ln:
+            in_detail = True
+            continue
+        if not in_detail:
+            continue
+        if "รวมชั่วโมง" in ln or "ลงชื่อ" in ln:
+            if current_row:
+                detail_rows.append(current_row)
+                current_row = None
+            if "รวมชั่วโมง" in ln:
+                break
+            continue
+
+        row_m = DETAIL_ROW_RE.match(ln)
+        if row_m:
+            if current_row:
+                detail_rows.append(current_row)
+            day, periods, time_range, group_code, code, tail = row_m.groups()
+            tail_clean = re.sub(r"\s+-\s+-\s*$", "", tail).strip()
+            current_row = {
+                "day": day,
+                "periods": re.sub(r"\s+", "", periods),
+                "time_range": re.sub(r"\s+", "", time_range),
+                "group_code": (group_code or "").strip(),
+                "course_code": code,
+                "tail_parts": [tail_clean] if tail_clean else [],
+            }
+        elif current_row and ln.strip():
+            part = re.sub(r"\s+-\s+-\s*$", "", ln).strip()
+            if part and part != "-":
+                current_row["tail_parts"].append(part)
+
+    if current_row:
+        detail_rows.append(current_row)
+
+    if not detail_rows:
+        fallback_items, fallback_warn = parse_csv_or_text_timetable(text, sem)
+        return fallback_items, meta, fallback_warn
+
+    # 4. Merge simultaneous co-taught rows (same course_code + day + periods) into sessions
+    sessions: dict[tuple[str, str, str], dict[str, Any]] = {}
+    session_order: list[tuple[str, str, str]] = []
+    for r in detail_rows:
+        s_key = (r["course_code"], r["day"], r["periods"])
+        if s_key not in sessions:
+            tail_joined = " ".join(r["tail_parts"])
+            room = ""
+            if "สถานประกอบการ" in tail_joined:
+                room = "สถานประกอบการ"
+            elif "ห้องปฏิบัติการ" in tail_joined:
+                rm_m = re.search(r"(ห้องปฏิบัติการ[^\n]+)", tail_joined)
+                if rm_m:
+                    room = re.sub(r"\s+", "", rm_m.group(1))
+            sessions[s_key] = {
+                "course_code": r["course_code"],
+                "day": r["day"],
+                "periods": r["periods"],
+                "time_range": r["time_range"],
+                "group_codes": [r["group_code"]] if r["group_code"] else [],
+                "room": room,
+                "tail_text": tail_joined,
+            }
+            session_order.append(s_key)
+        else:
+            if r["group_code"] and r["group_code"] not in sessions[s_key]["group_codes"]:
+                sessions[s_key]["group_codes"].append(r["group_code"])
+
+    # 5. Group sessions by (course_code, tuple_of_group_codes) so simultaneous groups stay 1 item
+    #    while separate cohorts/times (e.g., ปวช.3 vs ทวิภาคี) stay distinct items!
+    grouped: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
+    group_order: list[tuple[str, tuple[str, ...]]] = []
+
+    for s_key in session_order:
+        sess = sessions[s_key]
+        code = sess["course_code"]
+        g_codes = tuple(sorted(sess["group_codes"]))
+        g_key = (code, g_codes)
+
+        hints = grid_hints.get((code, sess["day"]), [])
+        # Pick matching readable hint for this session (e.g., ทวิภาคี vs regular)
+        readable_hint = ""
+        if len(hints) == 1:
+            readable_hint = hints[0]
+        elif len(hints) > 1:
+            if "สถานประกอบการ" in sess["room"]:
+                readable_hint = next((h for h in hints if "ทวิภาคี" in h), hints[0])
+            else:
+                readable_hint = next((h for h in hints if "ทวิภาคี" not in h), hints[0])
+
+        sched_str = f"{sess['day']} คาบ {sess['periods']} ({sess['time_range']})"
+        if sess["room"] and sess["room"] not in sched_str:
+            sched_str += f" [{sess['room']}]"
+
+        if g_key not in grouped:
+            summary = summary_map.get(code, {})
+            is_dve = "ทวิภาคี" in readable_hint or "สถานประกอบการ" in sess["room"]
+            if readable_hint and g_codes:
+                group_display = f"{readable_hint} ({', '.join(g_codes)})"
+            elif readable_hint:
+                group_display = readable_hint
+            else:
+                group_display = ", ".join(g_codes)
+
+            grouped[g_key] = {
+                "course_code": code,
+                "course_name": summary.get("course_name") or sess["tail_text"] or f"รายวิชา {code}",
+                "t_hours": summary.get("t_hours", 1),
+                "p_hours": summary.get("p_hours", 3),
+                "credit_num": summary.get("credit_num", 2),
+                "student_group": group_display,
+                "schedule_text": sched_str,
+                "room": sess["room"],
+                "semester": sem,
+                "system_type": "ทวิภาคี" if is_dve else "ปกติ",
+                "is_special": code == "PLC" or code.startswith("20000-"),
+            }
+            group_order.append(g_key)
+        else:
+            existing = grouped[g_key]
+            if sched_str not in existing["schedule_text"]:
+                existing["schedule_text"] += f", {sched_str}"
+            if ("ทวิภาคี" in readable_hint or "สถานประกอบการ" in sess["room"]) and existing["system_type"] != "ทวิภาคี":
+                existing["system_type"] = "ทวิภาคี"
+
+    items = [normalize_course_item(grouped[k], sem) for k in group_order]
+    return items, meta, warnings

@@ -31,6 +31,7 @@ import {
   CourseRecord,
   CourseWeeklyItem,
   DocType,
+  TimetableMetadata,
   TimetableParsedItem,
   UserProfile,
 } from "@/lib/api";
@@ -418,7 +419,8 @@ export default function TeachingStudioPage() {
     importedItems: TimetableParsedItem[],
     savedCourses: CourseRecord[],
     allCourses: CourseRecord[],
-    skippedCount: number
+    skippedCount: number,
+    metadata?: TimetableMetadata
   ) {
     setCourses(allCourses);
     const firstCourse = savedCourses[0] || allCourses[0];
@@ -427,6 +429,20 @@ export default function TeachingStudioPage() {
       if (firstCourse.semester) {
         setNormSemester(firstCourse.semester);
       }
+    }
+
+    if (metadata) {
+      setCourseForm((prev) => ({
+        ...prev,
+        semester: metadata.semester || prev.semester,
+        instructor_name: metadata.instructor_name || prev.instructor_name,
+        department_name: metadata.department_name || prev.department_name,
+      }));
+      if (metadata.semester) setNormSemester(metadata.semester);
+      if (metadata.instructor_name) setNormInstructor(metadata.instructor_name);
+      if (metadata.department_name) setNormDept(metadata.department_name);
+      if (metadata.curriculum_head_name) setCurriculumHeadName(metadata.curriculum_head_name);
+      if (metadata.deputy_academic_name) setDeputyAcademicName(metadata.deputy_academic_name);
     }
 
     if (importedItems.length > 0) {
@@ -441,15 +457,17 @@ export default function TeachingStudioPage() {
         }))
       );
 
-      const dept = normDept || courseForm.department_name || "";
+      const dept = metadata?.department_name || normDept || courseForm.department_name || "";
+      const major = metadata?.major_name || dept;
       setOnlSections(
         importedItems.map((it) => ({
           ...emptyOnlineSection(dept),
           course_code: it.course_code,
           course_name: it.course_name,
           level_type: it.curriculum_level === "ปวส." ? "ปวส." : "ปวช.",
+          system_type: it.system_type === "ทวิภาคี" ? "ทวิภาคี" : "ปกติ",
           student_group: it.student_group || "",
-          major_name: dept,
+          major_name: major,
           total_students: it.total_students || 0,
           present_students: it.total_students || 0,
         }))
@@ -460,7 +478,7 @@ export default function TeachingStudioPage() {
           course_label: `${it.course_code} ${it.course_name}`.trim(),
           time_text: it.schedule_text || "",
           class_level: it.student_group || it.curriculum_level || "",
-          major_name: dept,
+          major_name: major,
           total_students: it.total_students || 0,
           present_students: it.total_students || 0,
         }))

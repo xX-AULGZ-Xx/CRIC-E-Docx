@@ -486,11 +486,24 @@ export interface TimetableParsedItem {
   schedule_text: string;
   room: string;
   semester: string;
+  system_type?: "ปกติ" | "ทวิภาคี";
+  is_special?: boolean;
   selected?: boolean;
+}
+
+export interface TimetableMetadata {
+  semester?: string;
+  instructor_name?: string;
+  department_name?: string;
+  major_name?: string;
+  curriculum_head_name?: string;
+  deputy_academic_name?: string;
+  director_name?: string;
 }
 
 export interface TimetableParseResponse {
   items: TimetableParsedItem[];
+  metadata?: TimetableMetadata;
   source: string;
   warnings: string[];
 }
