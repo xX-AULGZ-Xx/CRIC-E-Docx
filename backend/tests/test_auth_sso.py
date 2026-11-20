@@ -549,3 +549,128 @@ def test_plan_user_settings_multi_units_head_toggle_and_admin_crud():
         assert db.get_user_by_identifier(uid) is None
     finally:
         _restore_integrations(prev)
+
+
+def test_sync_panel_plan_all_webhook_and_auto_sync_status(monkeypatch):
+    client.cookies.clear()
+    prev = _with_temp_integrations(
+        {
+            "auth_dev_mode": True,
+            "panel_api_url": "https://panel.cric.ac.th",
+            "project_system_url": "https://plan.cric.ac.th",
+            "panel_api_token": "shared-sync-token-2026",
+            "panel_sync_secret": "shared-sync-token-2026",
+            "auto_sync_enabled": True,
+            "auto_sync_interval_minutes": 15,
+            "auto_sync_sources": "both",
+            "auto_sync_on_startup": True,
+        }
+    )
+    admin_headers = {"X-User-Email": "saraban@cric.ac.th"}
+
+    async def fake_fetch(base_url: str, token: str, timeout: float = 12.0):
+        assert token == "shared-sync-token-2026"
+        if "panel" in base_url:
+            return (
+                [
+                    {
+                        "id": "P-900",
+                        "username": "syncuser",
+                        "email": "syncuser@cric.ac.th",
+                        "full_name": "นายซิงค์ ทดสอบ",
+                        "role": "teacher",
+                        "avatarUrl": "/uploads/syncuser.png",
+                        "isActive": True,
+                    }
+                ],
+                f"{base_url}/api/v1/users",
+            )
+        if "plan" in base_url:
+            return (
+                [
+                    {
+                        "username": "syncuser",
+                        "email": "syncuser@cric.ac.th",
+                        "full_name": "นายซิงค์ ทดสอบ",
+                        "position_title": "หัวหน้างานอาคารสถานที่",
+                        "personnel_type": "TEACHER",
+                        "division_codes": ["ฝบ."],
+                        "units": ["งานอาคารสถานที่"],
+                        "head_units": ["งานอาคารสถานที่"],
+                        "role": "drafter",
+                        "is_active": True,
+                    }
+                ],
+                f"{base_url}/api/v1/users",
+            )
+        return [], None
+
+    monkeypatch.setattr(auth_router, "_fetch_upstream_users", fake_fetch)
+
+    try:
+        # Preserve existing signature_storage_path during upstream overwrite
+        created_u = db.upsert_user(
+            {
+                "username": "syncuser",
+                "email": "syncuser@cric.ac.th",
+                "full_name": "Old Name",
+                "role": "drafter",
+            }
+        )
+        db.set_user_signature(created_u["id"], "/app/storage/signatures/keep_me.png")
+
+        # 1. sync-all merges Panel -> Plan and promotes head_units -> unit_head while keeping signature_storage_path
+        all_res = client.post("/v1/auth/sync-all", headers=admin_headers)
+        assert all_res.status_code == 200
+        body = all_res.json()
+        assert body["panel_count"] == 1
+        assert body["plan_count"] == 1
+        assert body["synced_count"] == 1
+        u = db.get_user_by_identifier("syncuser@cric.ac.th")
+        assert u is not None
+        assert u["full_name"] == "นายซิงค์ ทดสอบ"
+        assert u["role"] == "unit_head"
+        assert u["units"] == ["งานอาคารสถานที่"]
+        assert u["head_units"] == ["งานอาคารสถานที่"]
+        assert u["signature_storage_path"] == "/app/storage/signatures/keep_me.png"
+
+        # 2. sync-status returns auto_sync settings + last_sync_status
+        st_res = client.get("/v1/auth/sync-status", headers=admin_headers)
+        assert st_res.status_code == 200
+        assert st_res.json()["auto_sync_enabled"] is True
+        assert st_res.json()["auto_sync_interval_minutes"] == 15
+        assert st_res.json()["sync_status"]["last_sync_status"] == "ok"
+
+        # 3. Webhook rejects invalid key and accepts valid key
+        bad_wh = client.post(
+            "/v1/auth/webhooks/user-sync",
+            headers={"X-CRIC-SYNC-KEY": "wrong"},
+            json={"source": "plan", "user": {"email": "wh@cric.ac.th", "full_name": "Bad"}},
+        )
+        assert bad_wh.status_code == 401
+
+        ok_wh = client.post(
+            "/v1/auth/webhooks/user-sync",
+            headers={"X-CRIC-SYNC-KEY": "shared-sync-token-2026"},
+            json={
+                "source": "plan",
+                "user": {
+                    "username": "whuser",
+                    "email": "whuser@cric.ac.th",
+                    "full_name": "นางสาวเว็บฮุค อัตโนมัติ",
+                    "division_code": "ฝบ.",
+                    "role": "staff",
+                },
+            },
+        )
+        assert ok_wh.status_code == 200
+        assert ok_wh.json()["synced_count"] == 1
+        assert db.get_user_by_identifier("whuser@cric.ac.th")["full_name"] == "นางสาวเว็บฮุค อัตโนมัติ"
+
+        # Clean up test users
+        for ident in ("syncuser@cric.ac.th", "whuser@cric.ac.th"):
+            rec = db.get_user_by_identifier(ident)
+            if rec:
+                db.delete_user(rec["id"])
+    finally:
+        _restore_integrations(prev)

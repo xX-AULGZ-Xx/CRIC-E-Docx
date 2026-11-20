@@ -99,6 +99,10 @@ def get_effective_integrations() -> dict[str, Any]:
         "student_screening_url": saved.get("student_screening_url", ""),
         "project_system_url": saved.get("project_system_url", "https://plan.cric.ac.th"),
         "evaluation_system_url": saved.get("evaluation_system_url", ""),
+        "auto_sync_enabled": bool(saved.get("auto_sync_enabled", True)),
+        "auto_sync_interval_minutes": max(5, min(1440, int(saved.get("auto_sync_interval_minutes", 30) or 30))),
+        "auto_sync_sources": saved.get("auto_sync_sources", "both") if saved.get("auto_sync_sources") in ("panel", "plan", "both") else "both",
+        "auto_sync_on_startup": bool(saved.get("auto_sync_on_startup", True)),
     }
 
 
@@ -155,10 +159,14 @@ class IntegrationsUpdate(BaseModel):
     student_screening_url: str = ""
     project_system_url: str = "https://plan.cric.ac.th"
     evaluation_system_url: str = ""
+    auto_sync_enabled: bool = True
+    auto_sync_interval_minutes: int = 30
+    auto_sync_sources: str = "both"  # panel | plan | both
+    auto_sync_on_startup: bool = True
 
 
 class IntegrationTestRequest(BaseModel):
-    target: str  # sso | panel
+    target: str  # sso | panel | plan
 
 
 class NotificationsUpdate(BaseModel):
@@ -223,6 +231,11 @@ def get_admin_settings(x_user_email: str | None = Header(default=None)):
             "student_screening_url": integ.get("student_screening_url", ""),
             "project_system_url": integ.get("project_system_url", "https://plan.cric.ac.th"),
             "evaluation_system_url": integ.get("evaluation_system_url", ""),
+            "auto_sync_enabled": bool(integ.get("auto_sync_enabled", True)),
+            "auto_sync_interval_minutes": int(integ.get("auto_sync_interval_minutes", 30)),
+            "auto_sync_sources": integ.get("auto_sync_sources", "both"),
+            "auto_sync_on_startup": bool(integ.get("auto_sync_on_startup", True)),
+            "sync_status": db.get_setting_json("user_sync_status", {}),
         },
         "notifications": {
             "enabled": bool(notif.get("enabled", False)),
@@ -288,6 +301,10 @@ def update_integrations(body: IntegrationsUpdate, x_user_email: str | None = Hea
         "student_screening_url": body.student_screening_url.strip(),
         "project_system_url": body.project_system_url.strip() or "https://plan.cric.ac.th",
         "evaluation_system_url": body.evaluation_system_url.strip(),
+        "auto_sync_enabled": bool(body.auto_sync_enabled),
+        "auto_sync_interval_minutes": max(5, min(1440, int(body.auto_sync_interval_minutes or 30))),
+        "auto_sync_sources": body.auto_sync_sources if body.auto_sync_sources in ("panel", "plan", "both") else "both",
+        "auto_sync_on_startup": bool(body.auto_sync_on_startup),
     }
     db.set_setting("integrations", data, actor["email"])
     db.add_audit_log(None, actor["email"], "integrations_updated", {"sso_issuer": data["sso_issuer"], "panel_api_url": data["panel_api_url"], "auth_dev_mode": data["auth_dev_mode"]})
@@ -347,8 +364,29 @@ async def test_integration(body: IntegrationTestRequest, request: Request, x_use
                 except Exception:
                     url = f"{panel_base}/api/v1/users"
                     resp = await client.get(url, headers=headers)
+            elif target == "plan":
+                plan_url = str(integ.get("project_system_url") or "https://plan.cric.ac.th").strip().rstrip("/")
+                plan_base = plan_url[:-4] if plan_url.endswith("/api") else plan_url
+                headers = {}
+                token = integ["panel_api_token"] or integ.get("panel_sync_secret")
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+                    headers["X-CRIC-SYNC-KEY"] = token
+                resp = None
+                url = f"{plan_base}/api/v1/users"
+                for cand in (f"{plan_base}/api/v1/users", f"{plan_base}/api/admin/users", f"{plan_base}/api/users"):
+                    try:
+                        r_cand = await client.get(cand, headers=headers)
+                        resp = r_cand
+                        url = cand
+                        if r_cand.status_code < 400:
+                            break
+                    except Exception:
+                        continue
+                if resp is None:
+                    raise HTTPException(status_code=502, detail=f"ไม่สามารถเชื่อมต่อ {plan_base} ได้")
             else:
-                raise HTTPException(status_code=400, detail="target ต้องเป็น sso หรือ panel")
+                raise HTTPException(status_code=400, detail="target ต้องเป็น sso, panel หรือ plan")
         ms = round((time.perf_counter() - t0) * 1000)
         return {"ok": 200 <= resp.status_code < 400, "status_code": resp.status_code, "latency_ms": ms, "url": url}
     except HTTPException:

@@ -352,6 +352,11 @@ export interface AdminSettingsResponse {
     student_screening_url?: string;
     project_system_url?: string;
     evaluation_system_url?: string;
+    auto_sync_enabled?: boolean;
+    auto_sync_interval_minutes?: number;
+    auto_sync_sources?: "panel" | "plan" | "both";
+    auto_sync_on_startup?: boolean;
+    sync_status?: UserSyncStatus;
   };
   notifications: {
     enabled: boolean;
@@ -523,6 +528,27 @@ export interface Sornor02ImportPayload {
   default_semester?: string;
 }
 
+export interface UserSyncStatus {
+  last_sync_at?: string;
+  last_sync_status?: string;
+  last_sync_mode?: string;
+  panel_count?: number;
+  plan_count?: number;
+  synced_count?: number;
+  sources?: string[];
+  last_error?: string;
+}
+
+export interface UserSyncResponse {
+  source: string;
+  sources?: string[];
+  panel_count?: number;
+  plan_count?: number;
+  synced_count: number;
+  users: UserProfile[];
+  sync_status?: UserSyncStatus;
+}
+
 export const api = {
   listServices: (role?: string) =>
     apiFetch<{
@@ -590,7 +616,17 @@ export const api = {
       body: JSON.stringify({ sessionToken }),
     }),
   listUsers: () => apiFetch<{ users: UserProfile[] }>("/v1/auth/users"),
-  syncPanelUsers: () => apiFetch<{ source: string; synced_count: number; users: UserProfile[] }>("/v1/auth/sync-panel", { method: "POST" }),
+  syncPanelUsers: () => apiFetch<UserSyncResponse>("/v1/auth/sync-panel", { method: "POST" }),
+  syncPlanUsers: () => apiFetch<UserSyncResponse>("/v1/auth/sync-plan", { method: "POST" }),
+  syncAllUsers: () => apiFetch<UserSyncResponse>("/v1/auth/sync-all", { method: "POST" }),
+  getUserSyncStatus: () =>
+    apiFetch<{
+      auto_sync_enabled: boolean;
+      auto_sync_interval_minutes: number;
+      auto_sync_sources: "panel" | "plan" | "both";
+      auto_sync_on_startup: boolean;
+      sync_status: UserSyncStatus;
+    }>("/v1/auth/sync-status"),
   uploadSignature: async (file: File) => {
     const fd = new FormData();
     fd.append("file", file);
@@ -808,8 +844,12 @@ export const api = {
     student_screening_url?: string;
     project_system_url?: string;
     evaluation_system_url?: string;
+    auto_sync_enabled?: boolean;
+    auto_sync_interval_minutes?: number;
+    auto_sync_sources?: "panel" | "plan" | "both";
+    auto_sync_on_startup?: boolean;
   }) => apiFetch<{ ok: boolean }>("/v1/settings/integrations", { method: "PUT", body: JSON.stringify(body) }),
-  testIntegration: (target: "sso" | "panel") =>
+  testIntegration: (target: "sso" | "panel" | "plan") =>
     apiFetch<{ ok: boolean; status_code: number; latency_ms: number; url?: string; error?: string }>("/v1/settings/integrations/test", {
       method: "POST",
       body: JSON.stringify({ target }),

@@ -2,18 +2,70 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import CORS_ORIGINS
 from app.db import db
 from app.routers import ai, auth, bundles, courses, documents, notifications, registry, services, settings, templates
-from app.routers.auth import reset_request_auth_context, set_request_auth_context
+from app.routers.auth import _effective_auth_cfg, reset_request_auth_context, run_user_sync, set_request_auth_context
+
+logger = logging.getLogger("cric.autosync")
+
+
+async def _auto_sync_loop() -> None:
+    try:
+        await asyncio.sleep(5)
+        cfg = _effective_auth_cfg()
+        if cfg.get("auto_sync_enabled") and cfg.get("auto_sync_on_startup", True):
+            mode = "all" if cfg.get("auto_sync_sources") == "both" else str(cfg.get("auto_sync_sources") or "all")
+            try:
+                await run_user_sync(mode=mode, actor_id="auto_sync_startup", is_auto=True)
+            except Exception as exc:
+                logger.warning("Startup auto-sync failed: %s", exc)
+
+        elapsed = 0
+        while True:
+            await asyncio.sleep(30)
+            elapsed += 30
+            cfg = _effective_auth_cfg()
+            if not cfg.get("auto_sync_enabled"):
+                elapsed = 0
+                continue
+            interval_sec = max(5, int(cfg.get("auto_sync_interval_minutes", 30) or 30)) * 60
+            if elapsed >= interval_sec:
+                elapsed = 0
+                mode = "all" if cfg.get("auto_sync_sources") == "both" else str(cfg.get("auto_sync_sources") or "all")
+                try:
+                    await run_user_sync(mode=mode, actor_id="auto_sync", is_auto=True)
+                except Exception as exc:
+                    logger.warning("Scheduled auto-sync failed: %s", exc)
+    except asyncio.CancelledError:
+        return
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    task = asyncio.create_task(_auto_sync_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
 
 app = FastAPI(
     title="CRIC E-Docx Document Engine",
     version="1.0.0",
     description="Official Thai government document drafting, validation, PDF preview, signing, and Saraban registry API.",
+    lifespan=lifespan,
 )
 
 

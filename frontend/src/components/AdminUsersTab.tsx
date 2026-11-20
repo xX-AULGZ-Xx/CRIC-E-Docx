@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Briefcase,
   Building,
@@ -16,7 +16,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { api, formatUserSubtitle, OrgProfile, UserProfile } from "@/lib/api";
+import { api, formatUserSubtitle, OrgProfile, UserProfile, UserSyncStatus } from "@/lib/api";
 import { UserAvatar } from "@/components/UserAvatar";
 import { DepartmentHeadSelector, DepartmentHeadValue } from "@/components/DepartmentHeadSelector";
 import { inferPersonnelType, ROLE_CONFIG } from "@/lib/personnelConstants";
@@ -46,7 +46,46 @@ export function AdminUsersTab({
   const [selectedDivision, setSelectedDivision] = useState("ALL");
   const [selectedUnit, setSelectedUnit] = useState("ALL");
   const [selectedStatus, setSelectedStatus] = useState("ALL");
-  const [syncingPanel, setSyncingPanel] = useState(false);
+  const [syncingMode, setSyncingMode] = useState<"panel" | "plan" | "all" | null>(null);
+  const [syncMeta, setSyncMeta] = useState<{
+    auto_sync_enabled: boolean;
+    auto_sync_interval_minutes: number;
+    auto_sync_sources: string;
+    sync_status: UserSyncStatus;
+  } | null>(null);
+
+  async function refreshSyncStatus() {
+    try {
+      const st = await api.getUserSyncStatus();
+      setSyncMeta(st);
+    } catch {
+      // ignore if unauthorized
+    }
+  }
+
+  useEffect(() => {
+    refreshSyncStatus();
+  }, []);
+
+  async function handleRunSync(mode: "panel" | "plan" | "all") {
+    setSyncingMode(mode);
+    try {
+      const res =
+        mode === "panel"
+          ? await api.syncPanelUsers()
+          : mode === "plan"
+          ? await api.syncPlanUsers()
+          : await api.syncAllUsers();
+      const label = mode === "panel" ? "Panel" : mode === "plan" ? "Plan" : "Panel + Plan";
+      onMsg(`ซิงค์ข้อมูลจาก ${label} สำเร็จ (${res.synced_count} รายการ — ${res.source})`);
+      toastSuccess(`ซิงค์ผู้ใช้จาก ${label} สำเร็จ`, `${res.synced_count} รายการ`);
+      await Promise.all([onReload(), refreshSyncStatus()]);
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : "ซิงค์ผู้ใช้ไม่สำเร็จ");
+    } finally {
+      setSyncingMode(null);
+    }
+  }
 
   // Create / Edit User Modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -297,30 +336,55 @@ export function AdminUsersTab({
           <div>
             <h2 className="text-sm font-bold text-[#0F172A] sm:text-base">จัดการผู้ใช้งาน สิทธิ์ (RBAC) สังกัด และลายเซ็น</h2>
             <p className="text-xs text-[#64748B]">
-              สร้าง แก้ไข กำหนดหลายฝ่าย/หลายงาน/หัวหน้างาน ลายเซ็น PNG และซิงค์ข้อมูลร่วมกับ panel.cric.ac.th
+              สร้าง แก้ไข กำหนดหลายฝ่าย/หลายงาน/หัวหน้างาน ลายเซ็น PNG และซิงค์ข้อมูลร่วมกับ panel.cric.ac.th & plan.cric.ac.th
             </p>
+            {syncMeta && (
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
+                <span
+                  className={`rounded-full px-2 py-0.5 font-semibold ${
+                    syncMeta.auto_sync_enabled ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"
+                  }`}
+                >
+                  Auto Sync: {syncMeta.auto_sync_enabled ? `เปิดทุก ${syncMeta.auto_sync_interval_minutes} นาที` : "ปิดอยู่"}
+                </span>
+                {syncMeta.sync_status?.last_sync_at && (
+                  <span className="text-[#475569]">
+                    ซิงค์ล่าสุด: {new Date(syncMeta.sync_status.last_sync_at).toLocaleString("th-TH")} (
+                    {syncMeta.sync_status.synced_count ?? 0} รายการ)
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={async () => {
-              setSyncingPanel(true);
-              try {
-                const res = await api.syncPanelUsers();
-                onMsg(`ซิงค์ข้อมูลจาก panel.cric.ac.th สำเร็จ (${res.synced_count} รายการ)`);
-                toastSuccess("ซิงค์ผู้ใช้จาก Panel สำเร็จ", `${res.synced_count} รายการ`);
-                await onReload();
-              } finally {
-                setSyncingPanel(false);
-              }
-            }}
-            disabled={syncingPanel}
+            onClick={() => handleRunSync("panel")}
+            disabled={syncingMode !== null}
+            className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${syncingMode === "panel" ? "animate-spin" : ""}`} />
+            <span>ซิงค์ Panel</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleRunSync("plan")}
+            disabled={syncingMode !== null}
+            className="inline-flex items-center gap-1.5 rounded-md border border-blue-300 bg-blue-50 px-2.5 py-2 text-xs font-semibold text-blue-800 hover:bg-blue-100 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${syncingMode === "plan" ? "animate-spin" : ""}`} />
+            <span>ซิงค์ Plan</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleRunSync("all")}
+            disabled={syncingMode !== null}
             className="inline-flex items-center gap-1.5 rounded-md bg-emerald-700 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${syncingPanel ? "animate-spin" : ""}`} />
-            <span>ซิงค์จาก Panel</span>
+            <RefreshCw className={`h-3.5 w-3.5 ${syncingMode === "all" ? "animate-spin" : ""}`} />
+            <span>ซิงค์ทั้งหมด</span>
           </button>
           <button
             type="button"

@@ -71,6 +71,10 @@ export default function SettingsPage() {
   const [screeningUrl, setScreeningUrl] = useState("");
   const [projectSysUrl, setProjectSysUrl] = useState("https://plan.cric.ac.th");
   const [evalSysUrl, setEvalSysUrl] = useState("");
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
+  const [autoSyncInterval, setAutoSyncInterval] = useState(30);
+  const [autoSyncSources, setAutoSyncSources] = useState<"panel" | "plan" | "both">("both");
+  const [autoSyncOnStartup, setAutoSyncOnStartup] = useState(true);
   const [ssoRedirectHint, setSsoRedirectHint] = useState("");
   const [ssoLogoutHint, setSsoLogoutHint] = useState("");
 
@@ -127,6 +131,10 @@ export default function SettingsPage() {
       setScreeningUrl(adm.integrations.student_screening_url || "");
       setProjectSysUrl(adm.integrations.project_system_url || "https://plan.cric.ac.th");
       setEvalSysUrl(adm.integrations.evaluation_system_url || "");
+      setAutoSyncEnabled(adm.integrations.auto_sync_enabled ?? true);
+      setAutoSyncInterval(adm.integrations.auto_sync_interval_minutes ?? 30);
+      setAutoSyncSources(adm.integrations.auto_sync_sources || "both");
+      setAutoSyncOnStartup(adm.integrations.auto_sync_on_startup ?? true);
 
       setNotifEnabled(adm.notifications.enabled);
       setNotifProvider(adm.notifications.provider);
@@ -216,6 +224,10 @@ export default function SettingsPage() {
         student_screening_url: screeningUrl,
         project_system_url: projectSysUrl,
         evaluation_system_url: evalSysUrl,
+        auto_sync_enabled: autoSyncEnabled,
+        auto_sync_interval_minutes: autoSyncInterval,
+        auto_sync_sources: autoSyncSources,
+        auto_sync_on_startup: autoSyncOnStartup,
       });
       setSsoClientSecret("");
       setPanelToken("");
@@ -230,7 +242,7 @@ export default function SettingsPage() {
     }
   }
 
-  async function handleTestConn(target: "sso" | "panel") {
+  async function handleTestConn(target: "sso" | "panel" | "plan") {
     setMsg("");
     setErrMsg("");
     const res = await api.testIntegration(target);
@@ -891,10 +903,76 @@ export default function SettingsPage() {
                 </div>
               </div>
 
+              <div className="rounded-md border border-emerald-200 bg-emerald-50/60 p-3 text-xs">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-bold text-emerald-900">ตั้งค่า Auto Sync บุคลากรอัตโนมัติ (Panel & Plan)</span>
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 font-semibold text-emerald-900">
+                    <input
+                      type="checkbox"
+                      checked={autoSyncEnabled}
+                      onChange={(e) => setAutoSyncEnabled(e.target.checked)}
+                      className="accent-emerald-700"
+                    />
+                    เปิดใช้งาน Auto Sync
+                  </label>
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-[#475569]">ความถี่การซิงค์อัตโนมัติ</label>
+                    <select
+                      value={autoSyncInterval}
+                      onChange={(e) => setAutoSyncInterval(Number(e.target.value))}
+                      className="ledger-input py-1 text-xs"
+                    >
+                      <option value={5}>ทุก 5 นาที</option>
+                      <option value={15}>ทุก 15 นาที</option>
+                      <option value={30}>ทุก 30 นาที</option>
+                      <option value={60}>ทุก 1 ชั่วโมง</option>
+                      <option value={360}>ทุก 6 ชั่วโมง</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-[#475569]">แหล่งข้อมูล</label>
+                    <select
+                      value={autoSyncSources}
+                      onChange={(e) => setAutoSyncSources(e.target.value as "panel" | "plan" | "both")}
+                      className="ledger-input py-1 text-xs"
+                    >
+                      <option value="both">ทั้ง Panel และ Plan (แนะนำ)</option>
+                      <option value="panel">เฉพาะ Panel (panel.cric.ac.th)</option>
+                      <option value="plan">เฉพาะ Plan (plan.cric.ac.th)</option>
+                    </select>
+                  </div>
+                  <div className="flex items-end pb-1">
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] font-semibold text-[#334155]">
+                      <input
+                        type="checkbox"
+                        checked={autoSyncOnStartup}
+                        onChange={(e) => setAutoSyncOnStartup(e.target.checked)}
+                        className="accent-emerald-700"
+                      />
+                      ซิงค์ทันทีเมื่อสตาร์ทเซิร์ฟเวอร์
+                    </label>
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-emerald-200/70 pt-2 text-[11px] text-emerald-900">
+                  <span>
+                    Webhook URL: <code className="rounded bg-white px-1.5 py-0.5 font-mono">/v1/auth/webhooks/user-sync</code>
+                  </span>
+                  {settings?.integrations.sync_status?.last_sync_at && (
+                    <span>
+                      ซิงค์ล่าสุด: <strong>{new Date(settings.integrations.sync_status.last_sync_at).toLocaleString("th-TH")}</strong> (
+                      {settings.integrations.sync_status.synced_count ?? 0} รายการ)
+                    </span>
+                  )}
+                </div>
+              </div>
+
               <div className="flex flex-wrap gap-2 pt-1">
                 <button type="submit" className="rounded-md bg-[#1D4ED8] px-4 py-2 text-xs font-semibold text-white hover:bg-[#1E40AF]">บันทึกการเชื่อมต่อ</button>
                 <button type="button" onClick={() => handleTestConn("sso")} className="rounded-md border border-[#CBD5E1] bg-white px-3 py-2 text-xs font-semibold text-[#0F172A] hover:bg-slate-50">ทดสอบ SSO</button>
                 <button type="button" onClick={() => handleTestConn("panel")} className="rounded-md border border-[#CBD5E1] bg-white px-3 py-2 text-xs font-semibold text-[#0F172A] hover:bg-slate-50">ทดสอบ Panel</button>
+                <button type="button" onClick={() => handleTestConn("plan")} className="rounded-md border border-[#CBD5E1] bg-white px-3 py-2 text-xs font-semibold text-[#0F172A] hover:bg-slate-50">ทดสอบ Plan</button>
               </div>
             </div>
           </form>

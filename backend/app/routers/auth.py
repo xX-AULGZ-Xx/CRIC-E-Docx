@@ -10,6 +10,7 @@ import json
 import secrets
 import shutil
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -109,6 +110,11 @@ def _effective_auth_cfg() -> dict[str, Any]:
         "panel_api_url": saved.get("panel_api_url", PANEL_API_URL),
         "panel_api_token": saved.get("panel_api_token", PANEL_API_TOKEN),
         "panel_sync_secret": saved.get("panel_sync_secret", PANEL_SYNC_SECRET),
+        "project_system_url": saved.get("project_system_url", "https://plan.cric.ac.th"),
+        "auto_sync_enabled": bool(saved.get("auto_sync_enabled", True)),
+        "auto_sync_interval_minutes": max(5, min(1440, int(saved.get("auto_sync_interval_minutes", 30) or 30))),
+        "auto_sync_sources": saved.get("auto_sync_sources", "both") if saved.get("auto_sync_sources") in ("panel", "plan", "both") else "both",
+        "auto_sync_on_startup": bool(saved.get("auto_sync_on_startup", True)),
     }
 
 
@@ -313,35 +319,70 @@ def _verify_oidc_id_token(
     return claims
 
 
-async def _lookup_panel_user(identifier: str | None, cfg: dict[str, Any]) -> dict[str, Any] | None:
-    if not identifier:
-        return None
-    panel_url = str(cfg.get("panel_api_url") or "").strip().rstrip("/")
-    panel_token = str(cfg.get("panel_api_token") or cfg.get("panel_sync_secret") or "").strip()
-    if not panel_url or not panel_token:
-        return None
-    panel_base = panel_url[:-4] if panel_url.endswith("/api") else panel_url
-    headers = {"Authorization": f"Bearer {panel_token}", "X-CRIC-SYNC-KEY": panel_token}
-    target_ident = identifier.strip().lower()
-
-    for url in (f"{panel_base}/api/v1/users", f"{panel_url}/api/v1/users", f"{panel_url}/users"):
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+async def _fetch_upstream_users(base_url: str, token: str, timeout: float = 12.0) -> tuple[list[dict[str, Any]], str | None]:
+    """Fetch user directory records from Panel or Plan using candidate endpoints."""
+    clean_url = str(base_url or "").strip().rstrip("/")
+    if not clean_url or not token:
+        return [], None
+    base = clean_url[:-4] if clean_url.endswith("/api") else clean_url
+    headers = {"Authorization": f"Bearer {token}", "X-CRIC-SYNC-KEY": token}
+    candidates = [
+        f"{base}/api/v1/users",
+        f"{base}/api/admin/users",
+        f"{base}/api/users",
+        f"{clean_url}/api/v1/users",
+        f"{clean_url}/users",
+    ]
+    seen: set[str] = set()
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for url in candidates:
+            if url in seen:
+                continue
+            seen.add(url)
+            try:
                 r = await client.get(url, headers=headers)
                 if r.status_code != 200:
                     continue
                 body = r.json()
                 rows = body.get("data") or body.get("users") or [] if isinstance(body, dict) else (body if isinstance(body, list) else [])
-                for rec in rows:
-                    if not isinstance(rec, dict):
-                        continue
-                    rec_email = str(rec.get("email") or "").strip().lower()
-                    rec_user = str(rec.get("username") or "").strip().lower()
-                    if target_ident in (rec_email, rec_user):
-                        return rec
-        except Exception:
-            continue
-    return None
+                if isinstance(rows, list):
+                    return [row for row in rows if isinstance(row, dict)], url
+            except Exception:
+                continue
+    return [], None
+
+
+async def _lookup_panel_user(identifier: str | None, cfg: dict[str, Any]) -> dict[str, Any] | None:
+    if not identifier:
+        return None
+    panel_url = str(cfg.get("panel_api_url") or "").strip().rstrip("/")
+    plan_url = str(cfg.get("project_system_url") or "").strip().rstrip("/")
+    panel_token = str(cfg.get("panel_api_token") or cfg.get("panel_sync_secret") or "").strip()
+    if not panel_token:
+        return None
+    target_ident = identifier.strip().lower()
+
+    def _find_match(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+        for rec in rows:
+            rec_email = str(rec.get("email") or "").strip().lower()
+            rec_user = str(rec.get("username") or "").strip().lower()
+            if target_ident in (rec_email, rec_user):
+                return rec
+        return None
+
+    panel_rows, _ = await _fetch_upstream_users(panel_url, panel_token, timeout=5.0) if panel_url else ([], None)
+    matched_panel = _find_match(panel_rows)
+
+    plan_rows, _ = await _fetch_upstream_users(plan_url, panel_token, timeout=5.0) if plan_url else ([], None)
+    matched_plan = _find_match(plan_rows)
+
+    if matched_panel and matched_plan:
+        merged = dict(matched_panel)
+        for k in ("units", "head_units", "headUnits", "division_code", "division_codes", "divisionCodes", "personnel_type", "position_title", "position", "department", "department_name", "role"):
+            if matched_plan.get(k) not in (None, "", []):
+                merged[k] = matched_plan[k]
+        return merged
+    return matched_panel or matched_plan
 
 
 def _extract_avatar_url(
@@ -1331,14 +1372,215 @@ async def sso_logout_get(
     return resp
 
 
-@router.post("/sync-panel")
-async def sync_from_panel(
-    payload: PanelSyncPayload | None = None,
-    x_user_email: str | None = Header(default=None),
-    x_user_identifier: str | None = Header(default=None),
-    authorization: str | None = Header(default=None),
-    cric_sso_session: str | None = Cookie(default=None),
-):
+_PANEL_DEV_SNAPSHOT: list[dict[str, Any]] = [
+    {
+        "panel_user_id": "CRIC-001",
+        "username": "director",
+        "email": "director@cric.ac.th",
+        "full_name": "นายยุทธการ ตั้งปัญญาศักดิ์",
+        "position_title": "ผู้อำนวยการวิทยาลัยการอาชีพเชียงราย",
+        "division_code": "",
+        "role": "director",
+        "is_active": True,
+    },
+    {
+        "panel_user_id": "CRIC-002",
+        "username": "orawan",
+        "email": "orawan@cric.ac.th",
+        "full_name": "นางสาวอรวรรณ แสงดาว",
+        "position_title": "รองผู้อำนวยการฝ่ายบริหารทรัพยากร",
+        "division_code": "ฝบ.",
+        "role": "deputy_director",
+        "is_active": True,
+    },
+    {
+        "panel_user_id": "CRIC-003",
+        "username": "saraban",
+        "email": "saraban@cric.ac.th",
+        "full_name": "นางสาวขนิษฐา สุใจยา",
+        "position_title": "หัวหน้างานบริหารงานทั่วไป",
+        "division_code": "ฝบ.",
+        "role": "saraban_admin",
+        "is_active": True,
+    },
+    {
+        "panel_user_id": "CRIC-004",
+        "username": "academic",
+        "email": "academic@cric.ac.th",
+        "full_name": "เจ้าหน้าที่ฝ่ายวิชาการ",
+        "position_title": "หัวหน้างานพัฒนาหลักสูตรการเรียนการสอน",
+        "division_code": "ฝว.",
+        "role": "unit_head",
+        "is_active": True,
+    },
+]
+
+
+def _infer_division_code(raw_div: str, dept_str: str) -> str:
+    if raw_div:
+        return raw_div
+    if not dept_str:
+        return ""
+    if "บริหารทรัพยากร" in dept_str or "สารบรรณ" in dept_str or "การเงิน" in dept_str or "อาคารสถานที่" in dept_str:
+        return "ฝบ."
+    if "วิชาการ" in dept_str or "หลักสูตร" in dept_str:
+        return "ฝว."
+    if "แผนงาน" in dept_str or "งบประมาณ" in dept_str or "ยุทธศาสตร์" in dept_str:
+        return "ฝย."
+    if "พัฒนากิจการ" in dept_str or "ปกครอง" in dept_str or "แนะแนว" in dept_str:
+        return "ฝก."
+    return ""
+
+
+def _normalize_and_upsert_records(records: list[dict[str, Any]], cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    synced: list[dict[str, Any]] = []
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        raw_username = str(rec.get("username") or "").strip().lstrip("@")
+        raw_email = str(rec.get("email") or "").strip().lower()
+        if not raw_username and raw_email:
+            raw_username = raw_email.split("@")[0]
+        if not raw_username and not raw_email:
+            continue
+
+        full_name = str(rec.get("full_name") or rec.get("displayName") or rec.get("name") or raw_username).strip()
+        position_title = str(rec.get("position_title") or rec.get("position") or "เจ้าหน้าที่").strip()
+        mapped_role = map_panel_role_to_edocx(rec.get("role"))
+
+        units = rec.get("units") if isinstance(rec.get("units"), list) else None
+        head_units = rec.get("head_units") if isinstance(rec.get("head_units"), list) else (
+            rec.get("headUnits") if isinstance(rec.get("headUnits"), list) else None
+        )
+        if mapped_role in ("drafter", "unit_head") and head_units:
+            mapped_role = "unit_head"
+
+        dept_str = str(rec.get("department") or rec.get("department_name") or rec.get("unit_name") or "").strip()
+        div_code = _infer_division_code(str(rec.get("division_code") or "").strip(), dept_str)
+        div_codes = rec.get("division_codes") if isinstance(rec.get("division_codes"), list) else (
+            rec.get("divisionCodes") if isinstance(rec.get("divisionCodes"), list) else ([div_code] if div_code else None)
+        )
+        unit_name = rec.get("unit_name") or rec.get("unitName") or rec.get("department_name") or (units[0] if units else None)
+
+        user_data: dict[str, Any] = {
+            "panel_user_id": str(rec.get("id") or rec.get("panel_user_id") or "").strip() or None,
+            "username": raw_username,
+            "email": raw_email or None,
+            "full_name": full_name,
+            "position_title": position_title,
+            "personnel_type": str(rec.get("personnel_type") or rec.get("personnelType") or "").strip().upper() or None,
+            "division_code": div_code,
+            "division_codes": div_codes,
+            "unit_name": unit_name,
+            "units": units,
+            "head_units": head_units,
+            "role": mapped_role,
+            "avatar_url": _extract_avatar_url(rec, rec, cfg),
+            "is_active": bool(rec.get("isActive", rec.get("is_active", True))),
+        }
+        # Strip None values so local signature_path & unset fields are preserved, while upstream role/divisions/units overwrite cleanly
+        user_data = {k: v for k, v in user_data.items() if v is not None}
+        synced.append(db.upsert_user(user_data))
+    return synced
+
+
+def _save_sync_status(status: str, mode: str, panel_count: int, plan_count: int, synced_count: int, sources: list[str], error: str = "") -> dict[str, Any]:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    st = {
+        "last_sync_at": now_iso,
+        "last_sync_status": status,
+        "last_sync_mode": mode,
+        "panel_count": panel_count,
+        "plan_count": plan_count,
+        "synced_count": synced_count,
+        "sources": sources,
+        "last_error": error,
+    }
+    db.set_setting("user_sync_status", st, "system")
+    return st
+
+
+async def run_user_sync(
+    mode: str = "all",
+    actor_id: str = "auto_sync",
+    payload_users: list[dict[str, Any]] | None = None,
+    is_auto: bool = False,
+) -> dict[str, Any]:
+    """Sync users from Panel, Plan, or both (Panel -> Plan merge), preserving local signatures."""
+    cfg = _effective_auth_cfg()
+    token = str(cfg.get("panel_api_token") or cfg.get("panel_sync_secret") or "").strip()
+    panel_url = str(cfg.get("panel_api_url") or "").strip().rstrip("/")
+    plan_url = str(cfg.get("project_system_url") or "").strip().rstrip("/")
+    dev_mode = bool(cfg.get("auth_dev_mode", AUTH_DEV_MODE))
+
+    sources: list[str] = []
+    panel_count = 0
+    plan_count = 0
+    all_synced_by_key: dict[str, dict[str, Any]] = {}
+
+    if payload_users is not None:
+        upserted = _normalize_and_upsert_records(payload_users, cfg)
+        for u in upserted:
+            all_synced_by_key[u.get("email") or u.get("username") or u["id"]] = u
+        sources.append("manual_payload")
+        if mode == "plan":
+            plan_count = len(upserted)
+        else:
+            panel_count = len(upserted)
+    else:
+        if mode in ("panel", "all"):
+            p_rows, p_hit = await _fetch_upstream_users(panel_url, token) if panel_url else ([], None)
+            if not p_rows and dev_mode and not is_auto:
+                p_rows = _PANEL_DEV_SNAPSHOT
+                p_hit = "panel_dev_snapshot"
+            if p_rows:
+                upserted = _normalize_and_upsert_records(p_rows, cfg)
+                panel_count = len(upserted)
+                sources.append(p_hit or panel_url)
+                for u in upserted:
+                    all_synced_by_key[u.get("email") or u.get("username") or u["id"]] = u
+
+        if mode in ("plan", "all"):
+            pl_rows, pl_hit = await _fetch_upstream_users(plan_url, token) if plan_url else ([], None)
+            if pl_rows:
+                upserted = _normalize_and_upsert_records(pl_rows, cfg)
+                plan_count = len(upserted)
+                sources.append(pl_hit or plan_url)
+                for u in upserted:
+                    all_synced_by_key[u.get("email") or u.get("username") or u["id"]] = u
+
+    synced_users = list(all_synced_by_key.values())
+    if not synced_users and not dev_mode and not is_auto:
+        err_msg = "ไม่สามารถดึงข้อมูลผู้ใช้จาก Panel หรือ Plan ได้ กรุณาตรวจสอบ URL และ Panel API Token / Sync Secret"
+        _save_sync_status("error", mode, panel_count, plan_count, 0, sources, error=err_msg)
+        raise HTTPException(status_code=502, detail=err_msg)
+
+    status_val = "ok" if synced_users else ("skipped" if is_auto else "ok")
+    sync_meta = _save_sync_status(status_val, mode, panel_count, plan_count, len(synced_users), sources)
+    if synced_users:
+        db.add_audit_log(
+            None,
+            actor_id,
+            f"{mode}_synced",
+            {"sources": sources, "panel_count": panel_count, "plan_count": plan_count, "count": len(synced_users)},
+        )
+    return {
+        "source": ", ".join(sources) if sources else "none",
+        "sources": sources,
+        "panel_count": panel_count,
+        "plan_count": plan_count,
+        "synced_count": len(synced_users),
+        "users": synced_users,
+        "sync_status": sync_meta,
+    }
+
+
+def _require_sync_admin(
+    x_user_email: str | None,
+    x_user_identifier: str | None,
+    authorization: str | None,
+    cric_sso_session: str | None,
+) -> dict[str, Any]:
     actor = resolve_current_user(
         x_user_email=x_user_email,
         x_user_identifier=x_user_identifier,
@@ -1347,154 +1589,93 @@ async def sync_from_panel(
     )
     if actor["role"] not in ("saraban_admin", "director") and not AUTH_DEV_MODE:
         raise HTTPException(status_code=403, detail="เฉพาะผู้ดูแลระบบหรือเจ้าหน้าที่สารบรรณเท่านั้นที่สั่งซิงค์ได้")
+    return actor
+
+
+@router.post("/sync-panel")
+async def sync_from_panel(
+    payload: PanelSyncPayload | None = None,
+    x_user_email: str | None = Header(default=None),
+    x_user_identifier: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+    cric_sso_session: str | None = Cookie(default=None),
+):
+    actor = _require_sync_admin(x_user_email, x_user_identifier, authorization, cric_sso_session)
+    actor_id = actor.get("email") or actor.get("username") or "admin"
+    return await run_user_sync("panel", actor_id=actor_id, payload_users=(payload.users if payload and payload.users else None))
+
+
+@router.post("/sync-plan")
+async def sync_from_plan(
+    payload: PanelSyncPayload | None = None,
+    x_user_email: str | None = Header(default=None),
+    x_user_identifier: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+    cric_sso_session: str | None = Cookie(default=None),
+):
+    actor = _require_sync_admin(x_user_email, x_user_identifier, authorization, cric_sso_session)
+    actor_id = actor.get("email") or actor.get("username") or "admin"
+    return await run_user_sync("plan", actor_id=actor_id, payload_users=(payload.users if payload and payload.users else None))
+
+
+@router.post("/sync-all")
+async def sync_all_sources(
+    x_user_email: str | None = Header(default=None),
+    x_user_identifier: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+    cric_sso_session: str | None = Cookie(default=None),
+):
+    actor = _require_sync_admin(x_user_email, x_user_identifier, authorization, cric_sso_session)
+    actor_id = actor.get("email") or actor.get("username") or "admin"
+    return await run_user_sync("all", actor_id=actor_id)
+
+
+@router.get("/sync-status")
+def get_user_sync_status(
+    x_user_email: str | None = Header(default=None),
+    x_user_identifier: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+    cric_sso_session: str | None = Cookie(default=None),
+):
+    _require_sync_admin(x_user_email, x_user_identifier, authorization, cric_sso_session)
+    cfg = _effective_auth_cfg()
+    return {
+        "auto_sync_enabled": cfg["auto_sync_enabled"],
+        "auto_sync_interval_minutes": cfg["auto_sync_interval_minutes"],
+        "auto_sync_sources": cfg["auto_sync_sources"],
+        "auto_sync_on_startup": cfg["auto_sync_on_startup"],
+        "sync_status": db.get_setting_json("user_sync_status", {}),
+    }
+
+
+@router.post("/webhooks/user-sync")
+async def webhook_user_sync(
+    body: dict[str, Any],
+    x_cric_sync_key: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+):
+    cfg = _effective_auth_cfg()
+    expected = str(cfg.get("panel_sync_secret") or cfg.get("panel_api_token") or "").strip()
+    bearer = ""
+    if authorization and authorization.lower().startswith("bearer "):
+        bearer = authorization[7:].strip()
+    provided = (x_cric_sync_key or bearer or "").strip()
+    if not expected or provided != expected:
+        raise HTTPException(status_code=401, detail="Invalid sync secret or token")
 
     records: list[dict[str, Any]] = []
-    source = "manual_payload"
+    if isinstance(body.get("users"), list):
+        records = [r for r in body["users"] if isinstance(r, dict)]
+    elif isinstance(body.get("user"), dict):
+        records = [body["user"]]
+    elif body.get("email") or body.get("username"):
+        records = [body]
 
-    cfg = _effective_auth_cfg()
-    panel_token = cfg["panel_api_token"] or cfg.get("panel_sync_secret")
-    panel_url = cfg["panel_api_url"].rstrip("/")
-    panel_base = panel_url[:-4] if panel_url.endswith("/api") else panel_url
-
-    if payload and payload.users:
-        records = payload.users
-    elif panel_url:
-        source = panel_url
-        headers: dict[str, str] = {}
-        if panel_token:
-            headers["Authorization"] = f"Bearer {panel_token}"
-            headers["X-CRIC-SYNC-KEY"] = panel_token
-
-        # Try panel users endpoint: /api/v1/users then fallback to /users
-        candidate_urls = [
-            f"{panel_base}/api/v1/users",
-            f"{panel_url}/api/v1/users",
-            f"{panel_url}/users",
-        ]
-
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = None
-            for curl in candidate_urls:
-                try:
-                    r = await client.get(curl, headers=headers)
-                    if r.status_code == 200:
-                        resp = r
-                        break
-                except Exception:
-                    continue
-
-            if resp and resp.status_code == 200:
-                body = resp.json()
-                if isinstance(body, dict):
-                    records = body.get("data") or body.get("users") or []
-                elif isinstance(body, list):
-                    records = body
-
-    if not records:
-        # Dev snapshot baseline when Panel connection is unreachable
-        source = "panel_dev_snapshot"
-        records = [
-            {
-                "panel_user_id": "CRIC-001",
-                "username": "director",
-                "email": "director@cric.ac.th",
-                "full_name": "นายยุทธการ ตั้งปัญญาศักดิ์",
-                "position_title": "ผู้อำนวยการวิทยาลัยการอาชีพเชียงราย",
-                "division_code": "",
-                "role": "director",
-                "is_active": True,
-            },
-            {
-                "panel_user_id": "CRIC-002",
-                "username": "orawan",
-                "email": "orawan@cric.ac.th",
-                "full_name": "นางสาวอรวรรณ แสงดาว",
-                "position_title": "รองผู้อำนวยการฝ่ายบริหารทรัพยากร",
-                "division_code": "ฝบ.",
-                "role": "deputy_director",
-                "is_active": True,
-            },
-            {
-                "panel_user_id": "CRIC-003",
-                "username": "saraban",
-                "email": "saraban@cric.ac.th",
-                "full_name": "นางสาวขนิษฐา สุใจยา",
-                "position_title": "หัวหน้างานบริหารงานทั่วไป",
-                "division_code": "ฝบ.",
-                "role": "saraban_admin",
-                "is_active": True,
-            },
-            {
-                "panel_user_id": "CRIC-004",
-                "username": "academic",
-                "email": "academic@cric.ac.th",
-                "full_name": "เจ้าหน้าที่ฝ่ายวิชาการ",
-                "position_title": "หัวหน้างานพัฒนาหลักสูตรการเรียนการสอน",
-                "division_code": "ฝว.",
-                "role": "unit_head",
-                "is_active": True,
-            },
-        ]
-
-    synced = []
-    for rec in records:
-        raw_username = str(rec.get("username") or "").strip().lstrip("@")
-        raw_email = str(rec.get("email") or "").strip().lower()
-        if not raw_username and raw_email:
-            raw_username = raw_email.split("@")[0]
-
-        if not raw_username and not raw_email:
-            continue
-
-        full_name = (
-            rec.get("full_name")
-            or rec.get("displayName")
-            or rec.get("name")
-            or raw_username
-        )
-        position_title = (
-            rec.get("position_title")
-            or rec.get("position")
-            or "เจ้าหน้าที่"
-        )
-        mapped_role = map_panel_role_to_edocx(rec.get("role"))
-
-        # Map department / division code
-        div_code = rec.get("division_code") or ""
-        dept_str = rec.get("department") or ""
-        if not div_code and dept_str:
-            if "บริหารทรัพยากร" in dept_str or "สารบรรณ" in dept_str or "การเงิน" in dept_str:
-                div_code = "ฝบ."
-            elif "วิชาการ" in dept_str or "หลักสูตร" in dept_str:
-                div_code = "ฝว."
-            elif "แผนงาน" in dept_str or "งบประมาณ" in dept_str:
-                div_code = "ฝย."
-            elif "พัฒนากิจการ" in dept_str or "ปกครอง" in dept_str:
-                div_code = "ฝก."
-
-        user_data = {
-            "panel_user_id": str(rec.get("id") or rec.get("panel_user_id") or ""),
-            "username": raw_username,
-            "email": raw_email or None,
-            "full_name": full_name,
-            "position_title": position_title,
-            "personnel_type": str(rec.get("personnel_type") or "").strip().upper() or None,
-            "division_code": div_code,
-            "division_codes": rec.get("division_codes") if isinstance(rec.get("division_codes"), list) else None,
-            "unit_name": rec.get("unit_name") or rec.get("department_name") or None,
-            "units": rec.get("units") if isinstance(rec.get("units"), list) else None,
-            "head_units": rec.get("head_units") if isinstance(rec.get("head_units"), list) else None,
-            "role": mapped_role,
-            "avatar_url": _extract_avatar_url(rec, rec, cfg),
-            "is_active": bool(rec.get("isActive", rec.get("is_active", True))),
-        }
-        # Strip None values so existing fields are preserved by upsert_user
-        user_data = {k: v for k, v in user_data.items() if v is not None}
-        synced.append(db.upsert_user(user_data))
-
-    actor_id = actor.get("email") or actor.get("username") or "admin"
-    db.add_audit_log(None, actor_id, "panel_synced", {"source": source, "count": len(synced)})
-    return {"source": source, "synced_count": len(synced), "users": synced}
+    upserted = _normalize_and_upsert_records(records, cfg)
+    source = str(body.get("source") or "webhook")
+    st = _save_sync_status("ok", f"webhook:{source}", len(upserted) if source == "panel" else 0, len(upserted) if source == "plan" else 0, len(upserted), [source])
+    db.add_audit_log(None, f"webhook:{source}", "user_sync_webhook", {"source": source, "count": len(upserted)})
+    return {"ok": True, "source": source, "synced_count": len(upserted), "users": upserted, "sync_status": st}
 
 
 @router.post("/signature")
