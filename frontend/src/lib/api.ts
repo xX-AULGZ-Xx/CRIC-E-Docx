@@ -351,6 +351,7 @@ export interface AdminSettingsResponse {
     short_course_url?: string;
     student_screening_url?: string;
     project_system_url?: string;
+    plan_users_api_path?: string;
     evaluation_system_url?: string;
     auto_sync_enabled?: boolean;
     auto_sync_interval_minutes?: number;
@@ -542,6 +543,7 @@ export interface UserSyncStatus {
 export interface UserSyncResponse {
   source: string;
   sources?: string[];
+  warnings?: string[];
   panel_count?: number;
   plan_count?: number;
   synced_count: number;
@@ -843,6 +845,7 @@ export const api = {
     short_course_url?: string;
     student_screening_url?: string;
     project_system_url?: string;
+    plan_users_api_path?: string;
     evaluation_system_url?: string;
     auto_sync_enabled?: boolean;
     auto_sync_interval_minutes?: number;

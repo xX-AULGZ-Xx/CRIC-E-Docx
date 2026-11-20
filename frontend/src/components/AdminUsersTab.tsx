@@ -77,7 +77,8 @@ export function AdminUsersTab({
           ? await api.syncPlanUsers()
           : await api.syncAllUsers();
       const label = mode === "panel" ? "Panel" : mode === "plan" ? "Plan" : "Panel + Plan";
-      onMsg(`ซิงค์ข้อมูลจาก ${label} สำเร็จ (${res.synced_count} รายการ — ${res.source})`);
+      const warnSuffix = res.warnings && res.warnings.length > 0 ? ` (${res.warnings.join(" | ")})` : "";
+      onMsg(`ซิงค์ข้อมูลจาก ${label} สำเร็จ (${res.synced_count} รายการ — ${res.source})${warnSuffix}`);
       toastSuccess(`ซิงค์ผู้ใช้จาก ${label} สำเร็จ`, `${res.synced_count} รายการ`);
       await Promise.all([onReload(), refreshSyncStatus()]);
     } catch (err) {

@@ -111,6 +111,7 @@ def _effective_auth_cfg() -> dict[str, Any]:
         "panel_api_token": saved.get("panel_api_token", PANEL_API_TOKEN),
         "panel_sync_secret": saved.get("panel_sync_secret", PANEL_SYNC_SECRET),
         "project_system_url": saved.get("project_system_url", "https://plan.cric.ac.th"),
+        "plan_users_api_path": saved.get("plan_users_api_path", ""),
         "auto_sync_enabled": bool(saved.get("auto_sync_enabled", True)),
         "auto_sync_interval_minutes": max(5, min(1440, int(saved.get("auto_sync_interval_minutes", 30) or 30))),
         "auto_sync_sources": saved.get("auto_sync_sources", "both") if saved.get("auto_sync_sources") in ("panel", "plan", "both") else "both",
@@ -333,6 +334,8 @@ async def _fetch_upstream_users(base_url: str, token: str, timeout: float = 12.0
         f"{clean_url}/api/v1/users",
         f"{clean_url}/users",
     ]
+    if clean_url.count("/") >= 3 and not clean_url.endswith(("/api", ".th", ".com", ".net")):
+        candidates.insert(0, clean_url)
     seen: set[str] = set()
     async with httpx.AsyncClient(timeout=timeout) as client:
         for url in candidates:
@@ -1511,9 +1514,16 @@ async def run_user_sync(
     token = str(cfg.get("panel_api_token") or cfg.get("panel_sync_secret") or "").strip()
     panel_url = str(cfg.get("panel_api_url") or "").strip().rstrip("/")
     plan_url = str(cfg.get("project_system_url") or "").strip().rstrip("/")
+    custom_plan_path = str(cfg.get("plan_users_api_path") or "").strip()
+    if custom_plan_path and plan_url:
+        plan_base = plan_url[:-4] if plan_url.endswith("/api") else plan_url
+        plan_fetch_target = custom_plan_path if custom_plan_path.startswith("http") else f"{plan_base}/{custom_plan_path.lstrip('/')}"
+    else:
+        plan_fetch_target = plan_url
     dev_mode = bool(cfg.get("auth_dev_mode", AUTH_DEV_MODE))
 
     sources: list[str] = []
+    warnings: list[str] = []
     panel_count = 0
     plan_count = 0
     all_synced_by_key: dict[str, dict[str, Any]] = {}
@@ -1539,24 +1549,28 @@ async def run_user_sync(
                 sources.append(p_hit or panel_url)
                 for u in upserted:
                     all_synced_by_key[u.get("email") or u.get("username") or u["id"]] = u
+            elif panel_url:
+                warnings.append(f"Panel ({panel_url}) ไม่ตอบกลับรายการผู้ใช้ (ตรวจสอบ Token / API)")
 
         if mode in ("plan", "all"):
-            pl_rows, pl_hit = await _fetch_upstream_users(plan_url, token) if plan_url else ([], None)
+            pl_rows, pl_hit = await _fetch_upstream_users(plan_fetch_target, token) if plan_fetch_target else ([], None)
             if pl_rows:
                 upserted = _normalize_and_upsert_records(pl_rows, cfg)
                 plan_count = len(upserted)
-                sources.append(pl_hit or plan_url)
+                sources.append(pl_hit or plan_fetch_target)
                 for u in upserted:
                     all_synced_by_key[u.get("email") or u.get("username") or u["id"]] = u
+            elif plan_fetch_target:
+                warnings.append(f"Plan ({plan_fetch_target}) ยังไม่เปิดหรือไม่มี API รายชื่อผู้ใช้ (ตรวจสอบ Plan Users API Path / Token)")
 
     synced_users = list(all_synced_by_key.values())
     if not synced_users and not dev_mode and not is_auto:
-        err_msg = "ไม่สามารถดึงข้อมูลผู้ใช้จาก Panel หรือ Plan ได้ กรุณาตรวจสอบ URL และ Panel API Token / Sync Secret"
+        err_msg = " ; ".join(warnings) if warnings else "ไม่สามารถดึงข้อมูลผู้ใช้จาก Panel หรือ Plan ได้ กรุณาตรวจสอบ URL และ Panel API Token / Sync Secret"
         _save_sync_status("error", mode, panel_count, plan_count, 0, sources, error=err_msg)
-        raise HTTPException(status_code=502, detail=err_msg)
+        raise HTTPException(status_code=400, detail=err_msg)
 
     status_val = "ok" if synced_users else ("skipped" if is_auto else "ok")
-    sync_meta = _save_sync_status(status_val, mode, panel_count, plan_count, len(synced_users), sources)
+    sync_meta = _save_sync_status(status_val, mode, panel_count, plan_count, len(synced_users), sources, error="; ".join(warnings))
     if synced_users:
         db.add_audit_log(
             None,
@@ -1567,6 +1581,7 @@ async def run_user_sync(
     return {
         "source": ", ".join(sources) if sources else "none",
         "sources": sources,
+        "warnings": warnings,
         "panel_count": panel_count,
         "plan_count": plan_count,
         "synced_count": len(synced_users),

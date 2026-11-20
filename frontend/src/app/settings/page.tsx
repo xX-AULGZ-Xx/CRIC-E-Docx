@@ -70,6 +70,7 @@ export default function SettingsPage() {
   const [shortCourseUrl, setShortCourseUrl] = useState("");
   const [screeningUrl, setScreeningUrl] = useState("");
   const [projectSysUrl, setProjectSysUrl] = useState("https://plan.cric.ac.th");
+  const [planUsersApiPath, setPlanUsersApiPath] = useState("");
   const [evalSysUrl, setEvalSysUrl] = useState("");
   const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
   const [autoSyncInterval, setAutoSyncInterval] = useState(30);
@@ -130,6 +131,7 @@ export default function SettingsPage() {
       setShortCourseUrl(adm.integrations.short_course_url || "");
       setScreeningUrl(adm.integrations.student_screening_url || "");
       setProjectSysUrl(adm.integrations.project_system_url || "https://plan.cric.ac.th");
+      setPlanUsersApiPath(adm.integrations.plan_users_api_path || "");
       setEvalSysUrl(adm.integrations.evaluation_system_url || "");
       setAutoSyncEnabled(adm.integrations.auto_sync_enabled ?? true);
       setAutoSyncInterval(adm.integrations.auto_sync_interval_minutes ?? 30);
@@ -223,6 +225,7 @@ export default function SettingsPage() {
         short_course_url: shortCourseUrl,
         student_screening_url: screeningUrl,
         project_system_url: projectSysUrl,
+        plan_users_api_path: planUsersApiPath,
         evaluation_system_url: evalSysUrl,
         auto_sync_enabled: autoSyncEnabled,
         auto_sync_interval_minutes: autoSyncInterval,
@@ -851,7 +854,11 @@ export default function SettingsPage() {
                     <label className="mb-1 block text-[11px] font-semibold text-[#475569]">ระบบโครงการ (ฝ่ายแผน)</label>
                     <input type="url" value={projectSysUrl} onChange={(e) => setProjectSysUrl(e.target.value)} placeholder="https://plan.cric.ac.th" className="ledger-input py-1 text-xs" />
                   </div>
-                  <div className="sm:col-span-2">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-[#475569]">Plan Users API Path (ถ้าไม่ใช่ /api/v1/users)</label>
+                    <input type="text" value={planUsersApiPath} onChange={(e) => setPlanUsersApiPath(e.target.value)} placeholder="/api/v1/users หรือ https://..." className="ledger-input py-1 text-xs" />
+                  </div>
+                  <div>
                     <label className="mb-1 block text-[11px] font-semibold text-[#475569]">ระบบประเมิน (ฝ่ายแผน)</label>
                     <input type="url" value={evalSysUrl} onChange={(e) => setEvalSysUrl(e.target.value)} placeholder="https://..." className="ledger-input py-1 text-xs" />
                   </div>
