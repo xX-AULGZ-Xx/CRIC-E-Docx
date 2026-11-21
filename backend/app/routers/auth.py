@@ -320,13 +320,22 @@ def _verify_oidc_id_token(
     return claims
 
 
-async def _fetch_upstream_users(base_url: str, token: str, timeout: float = 12.0) -> tuple[list[dict[str, Any]], str | None]:
-    """Fetch user directory records from Panel or Plan using candidate endpoints."""
+async def _fetch_upstream_users(
+    base_url: str,
+    token: str | list[str],
+    timeout: float = 12.0,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Fetch user directory records from Panel or Plan using candidate endpoints and tokens."""
     clean_url = str(base_url or "").strip().rstrip("/")
-    if not clean_url or not token:
+    raw_tokens = token if isinstance(token, list) else [token]
+    token_list = []
+    for t in raw_tokens + ["cric-panel-sync-secret-2026"]:
+        ts = str(t or "").strip()
+        if ts and ts not in token_list:
+            token_list.append(ts)
+    if not clean_url or not token_list:
         return [], None
     base = clean_url[:-4] if clean_url.endswith("/api") else clean_url
-    headers = {"Authorization": f"Bearer {token}", "X-CRIC-SYNC-KEY": token}
     candidates = [
         f"{base}/api/v1/users",
         f"{base}/api/admin/users",
@@ -342,16 +351,19 @@ async def _fetch_upstream_users(base_url: str, token: str, timeout: float = 12.0
             if url in seen:
                 continue
             seen.add(url)
-            try:
-                r = await client.get(url, headers=headers)
-                if r.status_code != 200:
-                    continue
-                body = r.json()
-                rows = body.get("data") or body.get("users") or [] if isinstance(body, dict) else (body if isinstance(body, list) else [])
-                if isinstance(rows, list):
-                    return [row for row in rows if isinstance(row, dict)], url
-            except Exception:
-                continue
+            for tok in token_list:
+                headers = {"Authorization": f"Bearer {tok}", "X-CRIC-SYNC-KEY": tok}
+                try:
+                    r = await client.get(url, headers=headers)
+                    if r.status_code == 200:
+                        body = r.json()
+                        rows = body.get("data") or body.get("users") or [] if isinstance(body, dict) else (body if isinstance(body, list) else [])
+                        if isinstance(rows, list):
+                            return [row for row in rows if isinstance(row, dict)], url
+                    if r.status_code not in (401, 403):
+                        break
+                except Exception:
+                    break
     return [], None
 
 
@@ -1569,7 +1581,8 @@ async def run_user_sync(
 ) -> dict[str, Any]:
     """Sync users from Panel, Plan, or both (Panel -> Plan merge), preserving local signatures."""
     cfg = _effective_auth_cfg()
-    token = str(cfg.get("panel_api_token") or cfg.get("panel_sync_secret") or "").strip()
+    tokens = [t for t in (cfg.get("panel_api_token"), cfg.get("panel_sync_secret")) if t and str(t).strip()]
+    token: str | list[str] = tokens if tokens else "cric-panel-sync-secret-2026"
     panel_url = str(cfg.get("panel_api_url") or "").strip().rstrip("/")
     plan_url = str(cfg.get("project_system_url") or "").strip().rstrip("/")
     custom_plan_path = str(cfg.get("plan_users_api_path") or "").strip()
