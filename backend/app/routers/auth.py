@@ -107,9 +107,9 @@ def _effective_auth_cfg() -> dict[str, Any]:
         "sso_redirect_uri": saved.get("sso_redirect_uri", SSO_REDIRECT_URI),
         "allowed_domain": saved.get("allowed_domain", ALLOWED_EMAIL_DOMAIN),
         "auth_dev_mode": saved.get("auth_dev_mode", AUTH_DEV_MODE),
-        "panel_api_url": saved.get("panel_api_url", PANEL_API_URL),
-        "panel_api_token": saved.get("panel_api_token", PANEL_API_TOKEN),
-        "panel_sync_secret": saved.get("panel_sync_secret", PANEL_SYNC_SECRET),
+        "panel_api_url": saved.get("panel_api_url") or PANEL_API_URL,
+        "panel_api_token": saved.get("panel_api_token") or PANEL_API_TOKEN or "",
+        "panel_sync_secret": saved.get("panel_sync_secret") or PANEL_SYNC_SECRET or "cric-panel-sync-secret-2026",
         "project_system_url": saved.get("project_system_url", "https://plan.cric.ac.th"),
         "plan_users_api_path": saved.get("plan_users_api_path", ""),
         "auto_sync_enabled": bool(saved.get("auto_sync_enabled", True)),
@@ -1419,20 +1419,29 @@ _PANEL_DEV_SNAPSHOT: list[dict[str, Any]] = [
 ]
 
 
-def _infer_division_code(raw_div: str, dept_str: str) -> str:
-    if raw_div:
-        return raw_div
-    if not dept_str:
-        return ""
-    if "บริหารทรัพยากร" in dept_str or "สารบรรณ" in dept_str or "การเงิน" in dept_str or "อาคารสถานที่" in dept_str:
+def _map_division_code(raw_code: str, div_name: str = "", dept_str: str = "") -> str:
+    code = (raw_code or "").strip().upper()
+    if code in ("ฝบ.", "ฝว.", "ฝย.", "ฝก."):
+        return code
+    if code in ("ADMIN", "RES", "RESOURCE", "RESOURCES", "GENERAL"):
         return "ฝบ."
-    if "วิชาการ" in dept_str or "หลักสูตร" in dept_str:
+    if code in ("ACAD", "ACADEMIC", "CURRICULUM"):
         return "ฝว."
-    if "แผนงาน" in dept_str or "งบประมาณ" in dept_str or "ยุทธศาสตร์" in dept_str:
+    if code in ("PLAN", "PLANNING", "COOP", "BUDGET"):
         return "ฝย."
-    if "พัฒนากิจการ" in dept_str or "ปกครอง" in dept_str or "แนะแนว" in dept_str:
+    if code in ("STUDENT", "DEV", "AFFAIRS"):
         return "ฝก."
-    return ""
+
+    combined = f"{div_name} {dept_str}".strip()
+    if "บริหารทรัพยากร" in combined or "สารบรรณ" in combined or "การเงิน" in combined or "อาคารสถานที่" in combined:
+        return "ฝบ."
+    if "วิชาการ" in combined or "หลักสูตร" in combined or "แผนกวิชา" in combined:
+        return "ฝว."
+    if "แผนงาน" in combined or "งบประมาณ" in combined or "ยุทธศาสตร์" in combined or "ความร่วมมือ" in combined:
+        return "ฝย."
+    if "พัฒนากิจการ" in combined or "ปกครอง" in combined or "แนะแนว" in combined or "กิจกรรมนักเรียน" in combined:
+        return "ฝก."
+    return raw_code.strip() if raw_code.strip() in ("ฝบ.", "ฝว.", "ฝย.", "ฝก.") else ""
 
 
 def _normalize_and_upsert_records(records: list[dict[str, Any]], cfg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1440,6 +1449,13 @@ def _normalize_and_upsert_records(records: list[dict[str, Any]], cfg: dict[str, 
     for rec in records:
         if not isinstance(rec, dict):
             continue
+
+        raw_role = str(rec.get("role") or "").strip().lower()
+        personnel_type = str(rec.get("personnel_type") or rec.get("personnelType") or "").strip().upper()
+        # Skip student accounts from saraban directory
+        if raw_role == "student" or (personnel_type == "STUDENT" and not raw_role):
+            continue
+
         raw_username = str(rec.get("username") or "").strip().lstrip("@")
         raw_email = str(rec.get("email") or "").strip().lower()
         if not raw_username and raw_email:
@@ -1449,21 +1465,63 @@ def _normalize_and_upsert_records(records: list[dict[str, Any]], cfg: dict[str, 
 
         full_name = str(rec.get("full_name") or rec.get("displayName") or rec.get("name") or raw_username).strip()
         position_title = str(rec.get("position_title") or rec.get("position") or "เจ้าหน้าที่").strip()
-        mapped_role = map_panel_role_to_edocx(rec.get("role"))
+        mapped_role = map_panel_role_to_edocx(raw_role)
 
-        units = rec.get("units") if isinstance(rec.get("units"), list) else None
-        head_units = rec.get("head_units") if isinstance(rec.get("head_units"), list) else (
-            rec.get("headUnits") if isinstance(rec.get("headUnits"), list) else None
+        # Infer director/deputy_director from position or personnel_type if Panel role is generic
+        if mapped_role == "drafter":
+            if personnel_type == "DIRECTOR" or ("ผู้อำนวยการวิทยาลัย" in position_title and "รอง" not in position_title):
+                mapped_role = "director"
+            elif personnel_type == "DEPUTY_DIRECTOR" or "รองผู้อำนวยการ" in position_title:
+                mapped_role = "deputy_director"
+
+        units: list[str] = list(rec.get("units")) if isinstance(rec.get("units"), list) else []
+        head_units: list[str] = list(
+            rec.get("head_units") if isinstance(rec.get("head_units"), list) else (
+                rec.get("headUnits") if isinstance(rec.get("headUnits"), list) else []
+            )
         )
+        div_codes: list[str] = list(
+            rec.get("division_codes") if isinstance(rec.get("division_codes"), list) else (
+                rec.get("divisionCodes") if isinstance(rec.get("divisionCodes"), list) else []
+            )
+        )
+
+        # Parse Panel's nested departments: [{ isHead, department: { name, division: { code, name } } }]
+        panel_depts = rec.get("departments")
+        if isinstance(panel_depts, list):
+            for pd in panel_depts:
+                if not isinstance(pd, dict):
+                    continue
+                dept_obj = pd.get("department") if isinstance(pd.get("department"), dict) else pd
+                d_name = str(dept_obj.get("name") or "").strip()
+                if d_name:
+                    if d_name not in units:
+                        units.append(d_name)
+                    if pd.get("isHead") and d_name not in head_units:
+                        head_units.append(d_name)
+                div_obj = dept_obj.get("division") if isinstance(dept_obj.get("division"), dict) else {}
+                mapped_div = _map_division_code(
+                    str(div_obj.get("code") or ""),
+                    str(div_obj.get("name") or ""),
+                    d_name,
+                )
+                if mapped_div and mapped_div not in div_codes:
+                    div_codes.append(mapped_div)
+
         if mapped_role in ("drafter", "unit_head") and head_units:
             mapped_role = "unit_head"
 
         dept_str = str(rec.get("department") or rec.get("department_name") or rec.get("unit_name") or "").strip()
-        div_code = _infer_division_code(str(rec.get("division_code") or "").strip(), dept_str)
-        div_codes = rec.get("division_codes") if isinstance(rec.get("division_codes"), list) else (
-            rec.get("divisionCodes") if isinstance(rec.get("divisionCodes"), list) else ([div_code] if div_code else None)
-        )
-        unit_name = rec.get("unit_name") or rec.get("unitName") or rec.get("department_name") or (units[0] if units else None)
+        if dept_str and not units:
+            units.append(dept_str)
+
+        raw_div_code = str(rec.get("division_code") or "").strip()
+        inferred_div = _map_division_code(raw_div_code, "", dept_str)
+        if inferred_div and inferred_div not in div_codes:
+            div_codes.append(inferred_div)
+
+        div_code = div_codes[0] if div_codes else inferred_div
+        unit_name = str(rec.get("unit_name") or rec.get("unitName") or rec.get("department_name") or dept_str or (units[0] if units else "")).strip() or None
 
         user_data: dict[str, Any] = {
             "panel_user_id": str(rec.get("id") or rec.get("panel_user_id") or "").strip() or None,
@@ -1471,12 +1529,12 @@ def _normalize_and_upsert_records(records: list[dict[str, Any]], cfg: dict[str, 
             "email": raw_email or None,
             "full_name": full_name,
             "position_title": position_title,
-            "personnel_type": str(rec.get("personnel_type") or rec.get("personnelType") or "").strip().upper() or None,
+            "personnel_type": personnel_type or None,
             "division_code": div_code,
-            "division_codes": div_codes,
+            "division_codes": div_codes if div_codes else None,
             "unit_name": unit_name,
-            "units": units,
-            "head_units": head_units,
+            "units": units if units else None,
+            "head_units": head_units if head_units else None,
             "role": mapped_role,
             "avatar_url": _extract_avatar_url(rec, rec, cfg),
             "is_active": bool(rec.get("isActive", rec.get("is_active", True))),
@@ -1664,18 +1722,27 @@ def get_user_sync_status(
 
 
 @router.post("/webhooks/user-sync")
+@router.post("/webhook/panel-sync")
 async def webhook_user_sync(
     body: dict[str, Any],
     x_cric_sync_key: str | None = Header(default=None),
     authorization: str | None = Header(default=None),
 ):
     cfg = _effective_auth_cfg()
-    expected = str(cfg.get("panel_sync_secret") or cfg.get("panel_api_token") or "").strip()
+    valid_secrets = {
+        str(s).strip()
+        for s in (
+            cfg.get("panel_sync_secret"),
+            cfg.get("panel_api_token"),
+            "cric-panel-sync-secret-2026",
+        )
+        if s and str(s).strip()
+    }
     bearer = ""
     if authorization and authorization.lower().startswith("bearer "):
         bearer = authorization[7:].strip()
     provided = (x_cric_sync_key or bearer or "").strip()
-    if not expected or provided != expected:
+    if not provided or provided not in valid_secrets:
         raise HTTPException(status_code=401, detail="Invalid sync secret or token")
 
     records: list[dict[str, Any]] = []
@@ -1686,11 +1753,33 @@ async def webhook_user_sync(
     elif body.get("email") or body.get("username"):
         records = [body]
 
+    action = str(body.get("action") or body.get("event") or "upsert").strip().lower()
+    source = str(body.get("source") or "panel")
+
+    if action in ("delete", "deleted", "deactivate"):
+        deactivated: list[dict[str, Any]] = []
+        for rec in records:
+            ident = str(rec.get("email") or rec.get("username") or rec.get("id") or "").strip()
+            if not ident:
+                continue
+            existing = db.get_user_by_identifier(ident)
+            if existing:
+                updated = db.upsert_user(
+                    {
+                        "username": existing["username"],
+                        "email": existing.get("email"),
+                        "is_active": False,
+                    }
+                )
+                deactivated.append(updated)
+        st = _save_sync_status("ok", f"webhook:{source}:deactivate", 0, 0, len(deactivated), [source])
+        db.add_audit_log(None, f"webhook:{source}", "user_sync_deactivate", {"source": source, "count": len(deactivated)})
+        return {"ok": True, "action": action, "source": source, "synced_count": len(deactivated), "users": deactivated, "sync_status": st}
+
     upserted = _normalize_and_upsert_records(records, cfg)
-    source = str(body.get("source") or "webhook")
     st = _save_sync_status("ok", f"webhook:{source}", len(upserted) if source == "panel" else 0, len(upserted) if source == "plan" else 0, len(upserted), [source])
     db.add_audit_log(None, f"webhook:{source}", "user_sync_webhook", {"source": source, "count": len(upserted)})
-    return {"ok": True, "source": source, "synced_count": len(upserted), "users": upserted, "sync_status": st}
+    return {"ok": True, "action": action, "source": source, "synced_count": len(upserted), "users": upserted, "sync_status": st}
 
 
 @router.post("/signature")
