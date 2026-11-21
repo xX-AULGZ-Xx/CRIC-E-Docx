@@ -917,11 +917,8 @@ export default function DraftStudioPage() {
                                         }
                                         className="ledger-input bg-white py-1 text-xs sm:col-span-2"
                                       />
-                                      <input
-                                        type="text"
-                                        list="order-committee-roles"
-                                        placeholder="ตำแหน่งในคณะฯ"
-                                        value={mem.role}
+                                      <select
+                                        value={mem.role || "กรรมการ"}
                                         onChange={(e) =>
                                           setOrderCommittees((prev) =>
                                             prev.map((c, i) =>
@@ -937,7 +934,26 @@ export default function DraftStudioPage() {
                                           )
                                         }
                                         className="ledger-input bg-white py-1 text-xs sm:col-span-3"
-                                      />
+                                        title="ตำแหน่งในคณะฯ"
+                                      >
+                                        {![
+                                          "ประธานกรรมการ",
+                                          "รองประธานกรรมการ",
+                                          "กรรมการ",
+                                          "กรรมการและเลขานุการ",
+                                          "กรรมการและผู้ช่วยเลขานุการ",
+                                          "ที่ปรึกษา",
+                                          "เลขานุการ",
+                                        ].includes(mem.role) &&
+                                          mem.role && <option value={mem.role}>{mem.role}</option>}
+                                        <option value="ประธานกรรมการ">ประธานกรรมการ</option>
+                                        <option value="รองประธานกรรมการ">รองประธานกรรมการ</option>
+                                        <option value="กรรมการ">กรรมการ</option>
+                                        <option value="กรรมการและเลขานุการ">กรรมการและเลขานุการ</option>
+                                        <option value="กรรมการและผู้ช่วยเลขานุการ">กรรมการและผู้ช่วยเลขานุการ</option>
+                                        <option value="ที่ปรึกษา">ที่ปรึกษา</option>
+                                        <option value="เลขานุการ">เลขานุการ</option>
+                                      </select>
                                       <button
                                         type="button"
                                         onClick={() =>
@@ -961,14 +977,6 @@ export default function DraftStudioPage() {
                             ))}
                           </div>
                         )}
-
-                        <datalist id="order-committee-roles">
-                          <option value="ประธานกรรมการ" />
-                          <option value="รองประธานกรรมการ" />
-                          <option value="กรรมการ" />
-                          <option value="กรรมการและเลขานุการ" />
-                          <option value="กรรมการและผู้ช่วยเลขานุการ" />
-                        </datalist>
                       </div>
 
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
