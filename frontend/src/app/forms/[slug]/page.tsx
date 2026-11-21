@@ -1007,44 +1007,27 @@ export default function DivisionDynamicFormPage() {
           </section>
         </div>
 
-        {/* Right Live A4 Preview */}
-        <div className="hidden xl:col-span-5 xl:block">
-          <div className="sticky top-20">
-            <DocumentPreviewPanel
-              fontFamily="TH Sarabun New"
-              pageImageUrls={renderResult?.page_image_urls || []}
-              pdfUrl={renderResult?.pdf_url || undefined}
-              docxUrl={renderResult?.docx_url || undefined}
-              versionKey={previewVersion}
-              loading={busy}
-              emptyMessage="กรอกรายละเอียดแบบฟอร์มด้านซ้าย แล้วกด 'สร้างเอกสารและพรีวิว'"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Mobile Floating Preview Pill */}
-      {(renderResult?.page_image_urls?.length || 0) > 0 && (
-        <button
-          type="button"
-          onClick={() => setMobilePreviewOpen(true)}
-          className="fixed bottom-4 right-4 z-30 inline-flex items-center gap-2 rounded-full bg-[#0F172A] px-4 py-2.5 text-xs font-semibold text-white shadow-lg xl:hidden"
-        >
-          <Eye className="h-4 w-4" />
-          <span>ดูตัวอย่างเอกสาร</span>
-          <span className="rounded-full bg-[#1D4ED8] px-2 py-0.5 text-[10px]">{renderResult?.page_image_urls.length} หน้า</span>
-        </button>
-      )}
-      <ResponsivePreviewModal open={mobilePreviewOpen} onOpenChange={setMobilePreviewOpen} title={meta.title}>
-        <DocumentPreviewPanel
-          fontFamily="TH Sarabun New"
-          pageImageUrls={renderResult?.page_image_urls || []}
-          pdfUrl={renderResult?.pdf_url || undefined}
-          docxUrl={renderResult?.docx_url || undefined}
-          versionKey={previewVersion}
+        {/* Right Live A4 Preview (Desktop sticky + Mobile/Tablet Modal) */}
+        <ResponsivePreviewModal
+          open={mobilePreviewOpen}
+          onOpenChange={setMobilePreviewOpen}
+          title={meta.title}
+          pageCount={renderResult?.page_image_urls?.length || 0}
           loading={busy}
-        />
-      </ResponsivePreviewModal>
+          hasPreview={(renderResult?.page_image_urls?.length || 0) > 0}
+          desktopColClass="xl:col-span-5"
+        >
+          <DocumentPreviewPanel
+            fontFamily="TH Sarabun New"
+            pageImageUrls={renderResult?.page_image_urls || []}
+            pdfUrl={renderResult?.pdf_url || undefined}
+            docxUrl={renderResult?.docx_url || undefined}
+            versionKey={previewVersion}
+            loading={busy}
+            emptyMessage="กรอกรายละเอียดแบบฟอร์มด้านซ้าย แล้วกด 'สร้างเอกสารและพรีวิว'"
+          />
+        </ResponsivePreviewModal>
+      </div>
     </div>
   );
 }
