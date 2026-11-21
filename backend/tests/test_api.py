@@ -597,3 +597,64 @@ def test_notifications_workflow_crud_and_sse():
     client.post(f"/v1/documents/{doc_id}/approve", headers={"X-User-Email": "director@cric.ac.th"}, json={"comment": "อนุมัติ", "stamp_signature": False})
     n_saraban = client.get("/v1/notifications", headers=saraban_h)
     assert any(i["document_id"] == doc_id and i["event_type"] == "approved" for i in n_saraban.json()["notifications"])
+
+
+def test_division_scoped_approvals_and_counts():
+    saraban_h = {"X-User-Email": "saraban@cric.ac.th"}
+    academic_h = {"X-User-Email": "academic@cric.ac.th"}
+
+    # Ensure academic@cric.ac.th is unit_head in ฝว. only
+    client.put(
+        "/v1/auth/users/academic@cric.ac.th",
+        headers=saraban_h,
+        json={"role": "unit_head", "division_code": "ฝว.", "division_codes": ["ฝว."]},
+    )
+
+    # Create a ฝบ. document by saraban (not assigned to academic) and a ฝว. document by academic
+    r_res = client.post(
+        "/v1/documents",
+        headers=saraban_h,
+        json={
+            "doc_type": "memo",
+            "division_code": "ฝบ.",
+            "subject": "เอกสารฝ่ายบริหารทรัพย์เฉพาะ",
+            "payload": {"subject": "เอกสารฝ่ายบริหารทรัพย์เฉพาะ", "body_paragraphs": ["ทดสอบ"]},
+            "convert_pdf": False,
+        },
+    )
+    assert r_res.status_code == 200
+    res_doc_id = r_res.json()["document"]["id"]
+
+    r_acad = client.post(
+        "/v1/documents",
+        headers=academic_h,
+        json={
+            "doc_type": "memo",
+            "division_code": "ฝว.",
+            "subject": "เอกสารฝ่ายวิชาการเฉพาะ",
+            "payload": {"subject": "เอกสารฝ่ายวิชาการเฉพาะ", "body_paragraphs": ["ทดสอบ"]},
+            "convert_pdf": False,
+        },
+    )
+    assert r_acad.status_code == 200
+    acad_doc_id = r_acad.json()["document"]["id"]
+
+    # academic (ฝว.) sees acad_doc_id, does NOT see res_doc_id
+    acad_list = client.get("/v1/documents", headers=academic_h)
+    assert acad_list.status_code == 200
+    acad_ids = {d["id"] for d in acad_list.json()["documents"]}
+    assert acad_doc_id in acad_ids
+    assert res_doc_id not in acad_ids
+
+    # saraban_admin sees both + accurate division_counts + division_code filter
+    all_list = client.get("/v1/documents", headers=saraban_h)
+    assert all_list.status_code == 200
+    body = all_list.json()
+    all_ids = {d["id"] for d in body["documents"]}
+    assert acad_doc_id in all_ids and res_doc_id in all_ids
+    assert body["division_counts"]["ฝบ."]["total"] >= 1
+    assert body["division_counts"]["ฝว."]["total"] >= 1
+
+    fb_only = client.get("/v1/documents?division_code=ฝบ.", headers=saraban_h)
+    assert fb_only.status_code == 200
+    assert all(d["division_code"] == "ฝบ." for d in fb_only.json()["documents"])

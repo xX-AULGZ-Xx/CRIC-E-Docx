@@ -91,6 +91,13 @@ export default function DivisionsHubPage() {
                     <p className="mt-0.5 text-[11px] text-[#64748B]">{div.description}</p>
                   </div>
                 </div>
+                <Link
+                  href={`/approvals?division=${encodeURIComponent(div.code)}`}
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#CBD5E1] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#1D4ED8] hover:bg-[#EFF6FF]"
+                >
+                  <span>ตรวจเอกสารฝ่ายนี้</span>
+                  <ArrowRight className="h-3 w-3" />
+                </Link>
               </div>
 
               <div className="divide-y divide-[#E2E8F0]">

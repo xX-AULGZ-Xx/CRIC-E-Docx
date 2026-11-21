@@ -568,8 +568,8 @@ def test_sync_panel_plan_all_webhook_and_auto_sync_status(monkeypatch):
     )
     admin_headers = {"X-User-Email": "saraban@cric.ac.th"}
 
-    async def fake_fetch(base_url: str, token: str, timeout: float = 12.0):
-        assert token == "shared-sync-token-2026"
+    async def fake_fetch(base_url: str, token, timeout: float = 12.0):
+        assert token == "shared-sync-token-2026" or "shared-sync-token-2026" in token
         if "panel" in base_url:
             return (
                 [

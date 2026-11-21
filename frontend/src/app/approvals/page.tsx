@@ -1,12 +1,52 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { CheckCircle, Download, Eye, FileBadge, RotateCcw, Upload, UserCog } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { CheckCircle, Download, Eye, FileBadge, RotateCcw, Search, Upload, UserCog } from "lucide-react";
 import { DocumentPreviewPanel } from "@/components/DocumentPreviewPanel";
 import { ResponsivePreviewModal } from "@/components/ResponsivePreviewModal";
 import { api, API_BASE, BundleFileInfo, DocumentRecord, UserProfile } from "@/lib/api";
 import { confirmAction, promptRevisionReason, toastError, toastSuccess } from "@/lib/swal";
+
+const DIVISION_TABS = [
+  { code: "ALL", label: "ทั้งหมด" },
+  { code: "ฝบ.", label: "ฝ่ายบริหารทรัพย์ (ฝบ.)" },
+  { code: "ฝว.", label: "ฝ่ายวิชาการ (ฝว.)" },
+  { code: "ฝก.", label: "ฝ่ายพัฒนา (ฝก.)" },
+  { code: "ฝย.", label: "ฝ่ายแผน (ฝย.)" },
+] as const;
+
+const DOC_TYPE_THAI: Record<string, string> = {
+  memo: "บันทึกข้อความ",
+  external: "หนังสือภายนอก",
+  order: "คำสั่ง",
+  announcement: "ประกาศ",
+  agenda: "ระเบียบวาระ",
+  minutes: "รายงานประชุม",
+  sp_bundle: "ชุดจัดซื้อ / สผ.",
+  course_syllabus: "กำหนดการสอน",
+  lesson_plan: "แผนการสอน",
+  post_teaching_normal: "หลังสอนปกติ",
+  post_teaching_online: "หลังสอนออนไลน์",
+  custom_template: "แม่แบบกำหนดเอง",
+  vehicle_request: "ขอใช้รถ",
+  official_travel: "ขอไปราชการ",
+  repair_request: "แจ้งซ่อม",
+  overload_teaching: "เบิกค่าสอนเกิน",
+  internship_supervision: "นิเทศฝึกงาน",
+  home_visit: "เยี่ยมบ้านนักเรียน",
+  project_summary: "สรุปโครงการ",
+  single_plan_summary: "สรุปแผนเดี่ยว",
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  draft: "ร่าง",
+  pending_review: "รอตรวจทาน",
+  needs_revision: "ต้องแก้ไข",
+  pending_approval: "รออนุมัติ",
+  approved: "อนุมัติแล้ว",
+  numbered: "ออกเลขแล้ว",
+};
 
 const STATUS_BADGES: Record<string, string> = {
   draft: "bg-slate-100 text-slate-700",
@@ -27,22 +67,87 @@ export default function ApprovalsPage() {
   const [previewVersion, setPreviewVersion] = useState(1);
   const [selectedBundleIdx, setSelectedBundleIdx] = useState(0);
   const [mobileReviewOpen, setMobileReviewOpen] = useState(false);
+  const [activeDivision, setActiveDivision] = useState<string>("ALL");
+  const [divisionInitialized, setDivisionInitialized] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<string>("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [divisionCounts, setDivisionCounts] = useState<Record<string, { total: number; pending: number }>>({});
 
   const selectedBundleFiles = ((selected?.payload_json?.bundle_files as BundleFileInfo[] | undefined) || []);
   const selectedZipUrl = (selected?.payload_json?.zip_url as string | undefined) || "";
   const activeBundleFile = selectedBundleFiles[selectedBundleIdx] || null;
+
+  const isGlobalViewer = me?.role === "director" || me?.role === "saraban_admin";
+  const allowedDivisions = useMemo(() => {
+    if (!me || isGlobalViewer) return new Set(["ฝบ.", "ฝว.", "ฝก.", "ฝย."]);
+    const s = new Set<string>(me.division_codes || []);
+    if (me.division_code) s.add(me.division_code);
+    return s;
+  }, [me, isGlobalViewer]);
+
+  const visibleDivisionTabs = useMemo(() => {
+    if (!me || isGlobalViewer) return DIVISION_TABS;
+    return DIVISION_TABS.filter(
+      (t) => (t.code === "ALL" && allowedDivisions.size !== 1) || allowedDivisions.has(t.code)
+    );
+  }, [me, isGlobalViewer, allowedDivisions]);
+
+  const filteredDocs = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const myIdents = new Set([me?.email?.toLowerCase(), me?.username?.toLowerCase()].filter(Boolean) as string[]);
+    return docs.filter((d) => {
+      if (activeDivision !== "ALL" && (d.division_code || "") !== activeDivision) return false;
+      if (statusFilter === "MY_QUEUE") {
+        const isPending = d.status === "pending_review" || d.status === "pending_approval";
+        const assignedToMe = (d.approval_steps || []).some(
+          (st) => st.action === "pending" && myIdents.has((st.assignee_email || "").toLowerCase())
+        );
+        if (!isPending && !assignedToMe) return false;
+        if ((d.approval_steps || []).length > 0 && !assignedToMe && !isGlobalViewer) return false;
+      } else if (statusFilter === "approved_done") {
+        if (d.status !== "approved" && d.status !== "numbered") return false;
+      } else if (statusFilter !== "ALL" && d.status !== statusFilter) {
+        return false;
+      }
+      if (q) {
+        const hay = `${d.subject} ${d.doc_number || ""} ${d.created_by || ""} ${DOC_TYPE_THAI[d.doc_type] || d.doc_type}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [docs, activeDivision, statusFilter, searchQuery, me, isGlobalViewer]);
 
   async function refresh() {
     try {
       const [meRes, docsRes] = await Promise.all([api.me(), api.listDocuments()]);
       setMe(meRes.user);
       setDocs(docsRes.documents);
+      if (docsRes.division_counts) setDivisionCounts(docsRes.division_counts);
 
+      let queryDiv: string | null = null;
       let queryDocId: string | null = null;
       try {
-        queryDocId = new URLSearchParams(window.location.search).get("doc");
+        const sp = new URLSearchParams(window.location.search);
+        queryDocId = sp.get("doc");
+        queryDiv = sp.get("division");
       } catch {
         // ignore
+      }
+
+      let initialDiv = activeDivision;
+      if (!divisionInitialized) {
+        const u = meRes.user;
+        const isGlobal = u.role === "director" || u.role === "saraban_admin";
+        const userDivs = Array.from(new Set([...(u.division_codes || []), ...(u.division_code ? [u.division_code] : [])].filter(Boolean)));
+        if (queryDiv && (isGlobal || userDivs.includes(queryDiv))) {
+          initialDiv = queryDiv;
+        } else if (!isGlobal && userDivs.length === 1) {
+          initialDiv = userDivs[0];
+        } else {
+          initialDiv = "ALL";
+        }
+        setActiveDivision(initialDiv);
+        setDivisionInitialized(true);
       }
 
       if (queryDocId && !selected) {
@@ -60,7 +165,8 @@ export default function ApprovalsPage() {
         const updated = docsRes.documents.find((d) => d.id === selected.id) || null;
         setSelected(updated);
       } else if (docsRes.documents.length > 0) {
-        setSelected(docsRes.documents[0]);
+        const firstInDiv = docsRes.documents.find((d) => initialDiv === "ALL" || d.division_code === initialDiv) || docsRes.documents[0];
+        setSelected(firstInDiv);
       }
     } catch {
       // ignore
@@ -225,23 +331,116 @@ export default function ApprovalsPage() {
         </div>
       )}
 
+      {/* Division Tabs Bar */}
+      <div className="ledger-panel flex items-center gap-1.5 overflow-x-auto px-3 py-2.5">
+        {visibleDivisionTabs.map((dt) => {
+          const active = activeDivision === dt.code;
+          const totalCount =
+            dt.code === "ALL"
+              ? docs.length
+              : divisionCounts[dt.code]?.total ?? docs.filter((d) => d.division_code === dt.code).length;
+          const pendingCount =
+            dt.code === "ALL"
+              ? docs.filter((d) => d.status === "pending_review" || d.status === "pending_approval").length
+              : divisionCounts[dt.code]?.pending ??
+                docs.filter((d) => d.division_code === dt.code && (d.status === "pending_review" || d.status === "pending_approval")).length;
+          return (
+            <button
+              key={dt.code}
+              type="button"
+              onClick={() => {
+                setActiveDivision(dt.code);
+                const nextInTab = docs.find((d) => dt.code === "ALL" || d.division_code === dt.code) || null;
+                setSelected(nextInTab);
+                setSelectedBundleIdx(0);
+              }}
+              className={`inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                active
+                  ? "bg-[#1D4ED8] text-white shadow-xs"
+                  : "border border-[#E2E8F0] bg-[#F8FAFC] text-[#334155] hover:bg-slate-100"
+              }`}
+            >
+              <span>{dt.label}</span>
+              <span
+                className={`tabular-nums-th rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                  active ? "bg-white/20 text-white" : "bg-slate-200 text-[#0F172A]"
+                }`}
+              >
+                {totalCount}
+              </span>
+              {pendingCount > 0 && (
+                <span
+                  className={`tabular-nums-th rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                    active ? "bg-amber-300 text-[#0F172A]" : "bg-amber-100 text-amber-800"
+                  }`}
+                  title="รอดำเนินการ"
+                >
+                  รอ {pendingCount}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
         <div className="ledger-panel overflow-hidden xl:col-span-5">
           <div className="ledger-panel-header flex items-center justify-between">
-            <span className="text-xs font-bold text-[#0F172A]">รายการเอกสารทั้งหมด</span>
-            <span className="tabular-nums-th text-xs text-[#475569]">{docs.length} ฉบับ</span>
+            <span className="text-xs font-bold text-[#0F172A]">
+              รายการเอกสาร ({DIVISION_TABS.find((t) => t.code === activeDivision)?.label || "ทั้งหมด"})
+            </span>
+            <span className="tabular-nums-th text-xs text-[#475569]">{filteredDocs.length} ฉบับ</span>
           </div>
-          {docs.length === 0 ? (
+          <div className="space-y-2 border-b border-[#E2E8F0] bg-[#F8FAFC] p-3">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-[#64748B]" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="ค้นหาชื่อเรื่อง, เลขที่หนังสือ, ผู้ร่าง..."
+                className="ledger-input w-full py-1.5 pl-8 text-xs"
+              />
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {[
+                { id: "ALL", label: "ทั้งหมด" },
+                { id: "MY_QUEUE", label: "คิวงานของฉัน" },
+                { id: "pending_review", label: "รอตรวจทาน" },
+                { id: "pending_approval", label: "รออนุมัติ" },
+                { id: "needs_revision", label: "ต้องแก้ไข" },
+                { id: "approved_done", label: "อนุมัติแล้ว" },
+              ].map((sf) => (
+                <button
+                  key={sf.id}
+                  type="button"
+                  onClick={() => setStatusFilter(sf.id)}
+                  className={`rounded px-2 py-1 text-[11px] font-semibold transition ${
+                    statusFilter === sf.id
+                      ? "bg-[#0F172A] text-white"
+                      : "border border-[#CBD5E1] bg-white text-[#475569] hover:bg-slate-50"
+                  }`}
+                >
+                  {sf.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {filteredDocs.length === 0 ? (
             <div className="p-8 text-center text-sm text-[#475569]">
-              ยังไม่มีเอกสารส่งตรวจในคิว ไปที่หน้า{" "}
+              ไม่พบเอกสารในหมวด/ตัวกรองนี้ ไปที่หน้า{" "}
               <Link href="/draft" className="font-semibold text-[#1D4ED8] hover:underline">
                 &ldquo;ร่างเอกสาร&rdquo;
               </Link>{" "}
-              เพื่อสร้างและส่งเอกสารเข้าสู่ระบบ
+              หรือ{" "}
+              <Link href="/divisions" className="font-semibold text-[#1D4ED8] hover:underline">
+                &ldquo;เอกสารประจำ 4 ฝ่าย&rdquo;
+              </Link>{" "}
+              เพื่อสร้างและส่งเอกสาร
             </div>
           ) : (
             <div className="divide-y divide-[#E2E8F0]">
-              {docs.map((doc) => {
+              {filteredDocs.map((doc) => {
                 const isSelected = selected?.id === doc.id;
                 return (
                   <button
@@ -258,12 +457,19 @@ export default function ApprovalsPage() {
                         : "border-transparent bg-white hover:bg-[#F8FAFC]"
                     }`}
                   >
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <span className="rounded border border-[#CBD5E1] bg-[#F8FAFC] px-1.5 py-0.5 text-[11px] font-semibold text-[#334155]">
-                        {doc.doc_type}
-                      </span>
+                    <div className="mb-1 flex flex-wrap items-center justify-between gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {doc.division_code && (
+                          <span className="rounded bg-[#0F172A] px-1.5 py-0.5 text-[10px] font-bold text-white">
+                            {doc.division_code}
+                          </span>
+                        )}
+                        <span className="rounded border border-[#CBD5E1] bg-[#F8FAFC] px-1.5 py-0.5 text-[11px] font-semibold text-[#334155]">
+                          {DOC_TYPE_THAI[doc.doc_type] || doc.doc_type}
+                        </span>
+                      </div>
                       <span className={`rounded px-2 py-0.5 text-[11px] font-semibold ${STATUS_BADGES[doc.status] || "bg-slate-100"}`}>
-                        {doc.status}
+                        {STATUS_LABELS[doc.status] || doc.status}
                       </span>
                     </div>
                     <div className="text-sm font-semibold text-[#0F172A]">{doc.subject}</div>

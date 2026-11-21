@@ -48,6 +48,14 @@ DOC_TYPE_LABELS: dict[str, str] = {
     "post_teaching_normal": "หลังสอนปกติ",
     "post_teaching_online": "หลังสอนออนไลน์",
     "custom_template": "แม่แบบกำหนดเอง",
+    "vehicle_request": "ขอใช้รถ",
+    "official_travel": "ขอไปราชการ",
+    "repair_request": "แจ้งซ่อม",
+    "overload_teaching": "ขอเบิกค่าสอนเกินภาระงาน",
+    "internship_supervision": "นิเทศฝึกงาน",
+    "home_visit": "รายงานเยี่ยมบ้าน",
+    "project_summary": "สรุปโครงการ",
+    "single_plan_summary": "สรุปแผนเดี่ยว",
 }
 
 
@@ -356,15 +364,52 @@ def render_preview(body: RenderRequest, x_user_email: str | None = Header(defaul
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _user_can_view_document(user: dict[str, Any], doc: dict[str, Any]) -> bool:
+    role = str(user.get("role") or "")
+    if role in ("director", "saraban_admin"):
+        return True
+    user_idents = {str(user.get("email") or "").strip().lower(), str(user.get("username") or "").strip().lower()} - {""}
+    created_by = str(doc.get("created_by") or "").strip().lower()
+    if created_by and created_by in user_idents:
+        return True
+    steps = doc.get("approval_steps") or []
+    for st in steps:
+        if isinstance(st, dict) and str(st.get("assignee_email") or st.get("approver_email") or "").strip().lower() in user_idents:
+            return True
+    user_divs = {str(d).strip() for d in (user.get("division_codes") or []) if str(d).strip()}
+    if user.get("division_code"):
+        user_divs.add(str(user["division_code"]).strip())
+    doc_div = str(doc.get("division_code") or "").strip()
+    return bool(doc_div and doc_div in user_divs)
+
+
 @router.get("/documents")
 def list_documents(
     status: str | None = None,
     division_code: str | None = None,
     x_user_email: str | None = Header(default=None),
 ):
-    resolve_current_user(x_user_email)
-    docs = [_attach_page_images(d) for d in db.list_documents(status=status, division_code=division_code)]
-    return {"documents": docs}
+    user = resolve_current_user(x_user_email)
+    all_visible = [
+        _attach_page_images(d)
+        for d in db.list_documents(status=status, division_code=None)
+        if _user_can_view_document(user, d)
+    ]
+    division_counts: dict[str, dict[str, int]] = {
+        code: {"total": 0, "pending": 0} for code in ("ฝบ.", "ฝว.", "ฝก.", "ฝย.")
+    }
+    for d in all_visible:
+        dc = str(d.get("division_code") or "").strip()
+        if dc in division_counts:
+            division_counts[dc]["total"] += 1
+            if d.get("status") in ("pending_review", "pending_approval"):
+                division_counts[dc]["pending"] += 1
+
+    if division_code:
+        docs = [d for d in all_visible if str(d.get("division_code") or "").strip() == division_code.strip()]
+    else:
+        docs = all_visible
+    return {"documents": docs, "division_counts": division_counts}
 
 
 @router.get("/documents/{doc_id}")

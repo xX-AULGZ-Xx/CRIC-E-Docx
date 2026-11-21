@@ -677,8 +677,16 @@ export const api = {
       signal,
     }),
 
-  listDocuments: (status?: string) =>
-    apiFetch<{ documents: DocumentRecord[] }>(`/v1/documents${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+  listDocuments: (status?: string, divisionCode?: string) => {
+    const qs = new URLSearchParams();
+    if (status) qs.set("status", status);
+    if (divisionCode) qs.set("division_code", divisionCode);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return apiFetch<{
+      documents: DocumentRecord[];
+      division_counts?: Record<string, { total: number; pending: number }>;
+    }>(`/v1/documents${suffix}`);
+  },
   getDashboardSummary: () => apiFetch<DashboardSummaryResponse>("/v1/dashboard"),
   listNotifications: (unreadOnly = false, limit = 50) =>
     apiFetch<{ unread_count: number; notifications: NotificationRecord[] }>(
