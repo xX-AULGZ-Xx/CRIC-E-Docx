@@ -468,28 +468,39 @@ def _split_thai_name_parts(full_name: str) -> tuple[str, str]:
 
 
 def _append_order_committee_table(doc: docx.Document, after_p, c_idx: int, members: list[dict[str, Any]]):
-    """Insert a 4-column borderless member table aligned at 2.5 cm left indent."""
+    """Insert a 4-column borderless member table aligned at 3.2 cm left indent with explicit dxa widths."""
     tbl = doc.add_table(rows=len(members), cols=4)
     tbl.autofit = False
     remove_borderless_table_borders(tbl)
+
+    col_dxa = (539, 1871, 2098, 2551)  # 0.95, 3.30, 3.70, 4.50 cm (total 12.45 cm)
+    total_dxa = sum(col_dxa)
+
     tbl_pr = tbl._tbl.tblPr
-    for old_tag in ("w:tblInd", "w:tblLayout", "w:tblCellMar"):
+    for old_tag in ("w:tblW", "w:tblInd", "w:tblLayout", "w:tblCellMar"):
         for old in tbl_pr.findall(qn(old_tag)):
             tbl_pr.remove(old)
-    tbl_pr.append(parse_xml(f'<w:tblInd {nsdecls("w")} w:w="1417" w:type="dxa"/>'))
+    tbl_pr.append(parse_xml(f'<w:tblW {nsdecls("w")} w:w="{total_dxa}" w:type="dxa"/>'))
+    tbl_pr.append(parse_xml(f'<w:tblInd {nsdecls("w")} w:w="1814" w:type="dxa"/>'))
     tbl_pr.append(parse_xml(f'<w:tblLayout {nsdecls("w")} w:type="fixed"/>'))
     tbl_pr.append(
         parse_xml(
             f'<w:tblCellMar {nsdecls("w")}>'
-            '<w:top w:w="15" w:type="dxa"/>'
-            '<w:left w:w="25" w:type="dxa"/>'
-            '<w:bottom w:w="15" w:type="dxa"/>'
-            '<w:right w:w="25" w:type="dxa"/>'
+            '<w:top w:w="0" w:type="dxa"/>'
+            '<w:left w:w="15" w:type="dxa"/>'
+            '<w:bottom w:w="0" w:type="dxa"/>'
+            '<w:right w:w="15" w:type="dxa"/>'
             "</w:tblCellMar>"
         )
     )
 
-    col_widths = (Cm(1.1), Cm(3.4), Cm(3.7), Cm(4.8))
+    tbl_grid = tbl._tbl.tblGrid
+    if tbl_grid is not None:
+        for old_gc in list(tbl_grid.findall(qn("w:gridCol"))):
+            tbl_grid.remove(old_gc)
+        for w_dxa in col_dxa:
+            tbl_grid.append(parse_xml(f'<w:gridCol {nsdecls("w")} w:w="{w_dxa}"/>'))
+
     c_th = to_thai_digits(str(c_idx))
 
     for m_idx, mem in enumerate(members, start=1):
@@ -507,12 +518,15 @@ def _append_order_committee_table(doc: docx.Document, after_p, c_idx: int, membe
 
         for col_i, val in enumerate(values):
             cell = row.cells[col_i]
-            cell.width = col_widths[col_i]
+            tc_pr = cell._tc.get_or_add_tcPr()
+            for old_w in tc_pr.findall(qn("w:tcW")):
+                tc_pr.remove(old_w)
+            tc_pr.append(parse_xml(f'<w:tcW {nsdecls("w")} w:w="{col_dxa[col_i]}" w:type="dxa"/>'))
             p = cell.paragraphs[0]
             p.alignment = WD_ALIGN_PARAGRAPH.LEFT
             p.paragraph_format.space_before = Pt(0)
             p.paragraph_format.space_after = Pt(0)
-            p.paragraph_format.line_spacing = 1.0
+            p.paragraph_format.line_spacing = 0.95
             run = p.add_run(val)
             set_run_font(run, size_pt=16, bold=False, underline=False)
 
@@ -582,7 +596,7 @@ def build_order(payload: dict[str, Any], org: dict[str, Any]) -> docx.Document:
             cur = insert_paragraph_after(cur)
             set_paragraph_text(
                 cur,
-                [("มีหน้าที่  ", 16, True, True), (c_duties, 16, False, False)],
+                [("มีหน้าที่", 16, True, True), (f"  {c_duties}", 16, False, False)],
                 alignment=WD_ALIGN_PARAGRAPH.THAI_JUSTIFY,
                 before_pt=2,
                 after_pt=2,
