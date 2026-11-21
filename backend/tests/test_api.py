@@ -615,10 +615,12 @@ def test_division_scoped_approvals_and_counts():
         "/v1/documents",
         headers=saraban_h,
         json={
-            "doc_type": "memo",
-            "division_code": "ฝบ.",
-            "subject": "เอกสารฝ่ายบริหารทรัพย์เฉพาะ",
-            "payload": {"subject": "เอกสารฝ่ายบริหารทรัพย์เฉพาะ", "body_paragraphs": ["ทดสอบ"]},
+            "payload": {
+                "type": "memo",
+                "division_code": "ฝบ.",
+                "subject": "เอกสารฝ่ายบริหารทรัพย์เฉพาะ",
+                "paragraphs": ["ทดสอบ"],
+            },
             "convert_pdf": False,
         },
     )
@@ -629,10 +631,12 @@ def test_division_scoped_approvals_and_counts():
         "/v1/documents",
         headers=academic_h,
         json={
-            "doc_type": "memo",
-            "division_code": "ฝว.",
-            "subject": "เอกสารฝ่ายวิชาการเฉพาะ",
-            "payload": {"subject": "เอกสารฝ่ายวิชาการเฉพาะ", "body_paragraphs": ["ทดสอบ"]},
+            "payload": {
+                "type": "memo",
+                "division_code": "ฝว.",
+                "subject": "เอกสารฝ่ายวิชาการเฉพาะ",
+                "paragraphs": ["ทดสอบ"],
+            },
             "convert_pdf": False,
         },
     )

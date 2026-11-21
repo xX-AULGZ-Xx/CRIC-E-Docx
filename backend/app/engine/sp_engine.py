@@ -850,6 +850,122 @@ def _fill_sp5_urgent_po(
     doc.save(out_path)
 
 
+def _fill_sp3b_material_plan_docx(
+    payload: dict[str, Any],
+    items: list[dict[str, Any]],
+    out_path: Path,
+    org_profile: dict[str, Any],
+) -> None:
+    doc = docx.Document(resolve_system_template("sp/3b_material_plan.docx"))
+    org_name = org_profile.get("organization_name") or "วิทยาลัยการอาชีพเชียงราย"
+    project_name = str(payload.get("project_name") or "").strip()
+    course_name = str(payload.get("course_name") or "").strip() or project_name or "-"
+    course_code = str(payload.get("course_code") or "").strip() or "-"
+    periods_per_week = to_thai_digits(str(payload.get("periods_per_week") or "4"), False)
+    level_label = str(payload.get("level_label") or "ปวช.").strip()
+    department = str(payload.get("department_name") or "").strip() or "-"
+    student_count = to_thai_digits(str(payload.get("student_count") or "20"), False)
+    term_raw = str(payload.get("term_year") or "2/2569").strip()
+    if "/" in term_raw:
+        t_part, y_part = term_raw.split("/", 1)
+        term_text = f"ภาคเรียนที่ {to_thai_digits(t_part.strip(), False)} ปีการศึกษา {to_thai_digits(y_part.strip(), False)}"
+    else:
+        term_text = to_thai_digits(term_raw, False)
+    teacher = str(payload.get("requester_name") or "").strip() or "........................................"
+
+    ps = doc.paragraphs
+    if len(ps) > 18:
+        _set_para_text(ps[6], org_name)
+        _set_para_text(ps[8], f"วิชา {to_thai_digits(course_name)}")
+        _set_para_text(ps[9], f"รหัส วิชา {to_thai_digits(course_code, False)}")
+        _set_para_text(ps[11], f"จำนวนคาบต่อสัปดาห์ {periods_per_week} คาบ")
+        _set_para_text(ps[12], f"ระดับชั้น {to_thai_digits(level_label, False)}")
+        _set_para_text(ps[14], f"แผนกวิชา {department}")
+        _set_para_text(ps[15], f"จำนวนนักศึกษาทั้งหมด {student_count} คน")
+        _set_para_text(ps[16], term_text)
+        _set_para_text(ps[18], f"อาจารย์ผู้สอน  {teacher}")
+
+    if len(ps) > 59:
+        if payload.get("course_standards"):
+            _set_para_text(ps[41], f"\t{to_thai_digits(str(payload['course_standards']))}")
+        if payload.get("course_outcome"):
+            _set_para_text(ps[44], f"\t{to_thai_digits(str(payload['course_outcome']))}")
+        objs = payload.get("course_objectives") or payload.get("objectives") or []
+        if isinstance(objs, list) and objs:
+            for idx, p_idx in enumerate((47, 48, 49, 50)):
+                _set_para_text(ps[p_idx], f"\t{to_thai_digits(str(idx + 1), False)}. {objs[idx]}" if idx < len(objs) else "")
+        comps = payload.get("course_competencies") or []
+        if isinstance(comps, list) and comps:
+            for idx, p_idx in enumerate((53, 54, 55, 56)):
+                _set_para_text(ps[p_idx], f"\t{to_thai_digits(str(idx + 1), False)}. {comps[idx]}" if idx < len(comps) else "")
+        if payload.get("course_description"):
+            _set_para_text(ps[59], f"\t{to_thai_digits(str(payload['course_description']))}")
+
+    weekly_plan = payload.get("course_weekly_plan") or []
+    if weekly_plan and len(doc.tables) > 1:
+        t1 = doc.tables[1]
+        for r_idx in range(1, min(len(t1.rows), 1 + len(weekly_plan))):
+            wp = weekly_plan[r_idx - 1]
+            if not isinstance(wp, dict):
+                continue
+            row = t1.rows[r_idx]
+            _set_cell_text(row.cells[0], to_thai_digits(str(wp.get("week") or r_idx), False))
+            _set_cell_text(row.cells[1], to_thai_digits(str(wp.get("topic") or "")))
+            _set_cell_text(row.cells[2], to_thai_digits(str(wp.get("activities") or "")))
+            _set_cell_text(row.cells[3], to_thai_digits(str(wp.get("media") or "")))
+            _set_cell_text(row.cells[4], to_thai_digits(str(wp.get("evaluation") or "")))
+            _set_cell_text(row.cells[5], to_thai_digits(str(wp.get("competency") or "")))
+
+    # Table 4: แผนการใช้วัสดุฝึก (ครั้งที่ | งานที่ปฏิบัติ | งานที่ปฏิบัติ | รายการวัสดุฝึก | จำนวน | หน่วย)
+    if len(doc.tables) > 4:
+        t4 = doc.tables[4]
+        raw_rows = payload.get("material_plan_rows") or []
+        plan_rows: list[dict[str, str]] = []
+        if isinstance(raw_rows, list) and raw_rows:
+            for idx, rr in enumerate(raw_rows, start=1):
+                if isinstance(rr, dict):
+                    plan_rows.append(
+                        {
+                            "week": str(rr.get("week") or idx),
+                            "work_type": str(rr.get("work_type") or "ศึกษา/ปฏิบัติการ"),
+                            "task": str(rr.get("task") or project_name or "-"),
+                            "material": str(rr.get("material") or rr.get("name") or ""),
+                            "qty": str(rr.get("qty") or ""),
+                            "unit": str(rr.get("unit") or ""),
+                        }
+                    )
+        else:
+            for idx, it in enumerate(items, start=1):
+                plan_rows.append(
+                    {
+                        "week": str(it.get("week_no") or idx),
+                        "work_type": "ศึกษา/ปฏิบัติการ",
+                        "task": str(it.get("task") or project_name or "-"),
+                        "material": str(it["name"]),
+                        "qty": _fmt_num(it["qty"], True),
+                        "unit": str(it["unit"]),
+                    }
+                )
+
+        while len(t4.rows) < 1 + len(plan_rows):
+            t4.add_row()
+        for r_idx in range(1, len(t4.rows)):
+            row = t4.rows[r_idx]
+            if r_idx - 1 < len(plan_rows):
+                pr = plan_rows[r_idx - 1]
+                _set_cell_text(row.cells[0], to_thai_digits(pr["week"], False))
+                _set_cell_text(row.cells[1], to_thai_digits(pr["work_type"]))
+                _set_cell_text(row.cells[2], to_thai_digits(pr["task"]))
+                _set_cell_text(row.cells[3], to_thai_digits(pr["material"]))
+                _set_cell_text(row.cells[4], to_thai_digits(pr["qty"], False))
+                _set_cell_text(row.cells[5], to_thai_digits(pr["unit"]))
+            else:
+                for c_idx in range(6):
+                    _set_cell_text(row.cells[c_idx], "")
+
+    doc.save(out_path)
+
+
 def generate_sp_bundle(
     payload: dict[str, Any],
     out_dir: Path,
@@ -857,7 +973,7 @@ def generate_sp_bundle(
     org_profile: dict[str, Any],
     convert_pdf: bool = True,
 ) -> dict[str, Any]:
-    """Generate the complete 4- or 5-file สผ. bundle + PDF/PNG previews + ZIP."""
+    """Generate the complete 4- to 6-file สผ. bundle + PDF/PNG previews + ZIP."""
     out_dir.mkdir(parents=True, exist_ok=True)
     items, grand_total = _compute_items(payload.get("items") or [])
 
@@ -865,8 +981,10 @@ def generate_sp_bundle(
         ("memo", "1. บันทึกข้อความขออนุมัติดำเนินงาน", f"{prefix}_1_ขออนุมัติดำเนินงาน.docx", "docx"),
         ("sp1", "2. ใบ สผ.1 (พ. 101)", f"{prefix}_2_ใบสผ1.docx", "docx"),
         ("plan", "3. แผนโครงการฝึกฯ (.xlsx)", f"{prefix}_3_แผนโครงการฝึก.xlsx", "xlsx"),
-        ("tor", "4. ร่าง TOR (.xlsx)", f"{prefix}_4_TOR.xlsx", "xlsx"),
     ]
+    if payload.get("include_material_plan", True):
+        specs.append(("material_plan", "3b. แผนการใช้วัสดุ (.docx)", f"{prefix}_3b_แผนการใช้วัสดุ.docx", "docx"))
+    specs.append(("tor", "4. ร่าง TOR (.xlsx)", f"{prefix}_4_TOR.xlsx", "xlsx"))
     if payload.get("include_urgent_po"):
         specs.append(("urgent_po", "5. ใบสั่งซื้อชั่วคราว (เร่งด่วน)", f"{prefix}_5_ใบสั่งซื้อชั่วคราว.docx", "docx"))
 
@@ -881,6 +999,8 @@ def generate_sp_bundle(
             _fill_sp2_purchase(payload, items, grand_total, fpath, org_profile)
         elif key == "plan":
             _fill_sp3_training_xlsx(payload, items, grand_total, fpath, org_profile)
+        elif key == "material_plan":
+            _fill_sp3b_material_plan_docx(payload, items, fpath, org_profile)
         elif key == "tor":
             _fill_sp4_tor_xlsx(payload, items, grand_total, fpath, org_profile)
         elif key == "urgent_po":

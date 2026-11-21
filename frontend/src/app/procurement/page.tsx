@@ -5,7 +5,7 @@ import { Download, Eye, FileCheck2, PackageCheck, Plus, Send, Sparkles, Trash2 }
 import { DocumentPreviewPanel } from "@/components/DocumentPreviewPanel";
 import { NumericInput } from "@/components/NumericInput";
 import { ResponsivePreviewModal } from "@/components/ResponsivePreviewModal";
-import { api, API_BASE, BundleRenderResult, UserProfile } from "@/lib/api";
+import { api, API_BASE, BundleRenderResult, CourseRecord, CourseWeeklyItem, UserProfile } from "@/lib/api";
 import { toastError, toastInfo, toastSuccess } from "@/lib/swal";
 
 interface SpItemRow {
@@ -73,6 +73,20 @@ export default function ProcurementBundlePage() {
   const [includeUrgentPo, setIncludeUrgentPo] = useState(false);
   const [urgentVendor, setUrgentVendor] = useState("");
 
+  // 3b. Material Plan (.DOCX) & Course Library Sync
+  const [courses, setCourses] = useState<CourseRecord[]>([]);
+  const [selectedCourseId, setSelectedCourseId] = useState("");
+  const [includeMaterialPlan, setIncludeMaterialPlan] = useState(true);
+  const [courseCode, setCourseCode] = useState("");
+  const [courseName, setCourseName] = useState("");
+  const [periodsPerWeek, setPeriodsPerWeek] = useState("4");
+  const [courseStandards, setCourseStandards] = useState("");
+  const [courseOutcome, setCourseOutcome] = useState("");
+  const [courseDescription, setCourseDescription] = useState("");
+  const [courseObjectives, setCourseObjectives] = useState<string[]>([]);
+  const [courseCompetencies, setCourseCompetencies] = useState<string[]>([]);
+  const [courseWeeklyPlan, setCourseWeeklyPlan] = useState<CourseWeeklyItem[]>([]);
+
   const [items, setItems] = useState<SpItemRow[]>([
     { name: "", spec: "", qty: 1, unit: "ชุด", unit_price: 0, note: "" },
   ]);
@@ -123,6 +137,7 @@ export default function ProcurementBundlePage() {
     window.addEventListener("cric-user-changed", applyMyProfile);
     window.addEventListener("cric-profile-updated", applyMyProfile);
     api.listUsers().then((res) => setUsers(res.users)).catch(() => {});
+    api.listCourses(false).then((res) => setCourses(res.courses)).catch(() => {});
     api.getPublicSettings().then((pub) => {
       if (typeof pub.ai_copilot_enabled === "boolean") {
         setAiCopilotEnabled(pub.ai_copilot_enabled);
@@ -188,8 +203,39 @@ export default function ProcurementBundlePage() {
       committee_members: committeeText.split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 3),
       include_urgent_po: includeUrgentPo,
       urgent_po_vendor: urgentVendor,
+      include_material_plan: includeMaterialPlan,
+      course_code: courseCode,
+      course_name: courseName || projectName,
+      periods_per_week: periodsPerWeek,
+      course_standards: courseStandards,
+      course_outcome: courseOutcome,
+      course_description: courseDescription,
+      course_objectives: courseObjectives,
+      course_competencies: courseCompetencies,
+      course_weekly_plan: courseWeeklyPlan,
       items: items.filter((it) => it.name.trim()),
     };
+  }
+
+  function applyCourseForMaterialPlan(c: CourseRecord) {
+    setSelectedCourseId(c.id || "");
+    setCourseCode(c.course_code || "");
+    setCourseName(c.course_name || "");
+    if (c.curriculum_level) setLevelLabel(c.curriculum_level);
+    if (c.semester) setSemesterLabel(c.semester);
+    if (c.department_name) setDepartmentName((prev) => prev || c.department_name || "");
+    const objs = c.objectives_json || c.objectives || [];
+    const stds = c.standards_json || c.standards || [];
+    const comps = c.skills_json || c.skills || [];
+    setCourseObjectives(objs);
+    setCourseStandards(stds.join("\n"));
+    setCourseOutcome(c.curriculum_analysis || (objs[0] || ""));
+    setCourseCompetencies(comps);
+    setCourseDescription(c.description || "");
+    setCourseWeeklyPlan(c.weekly_plan_json || c.weekly_plan || []);
+    if (!objectivesText.trim() && objs.length > 0) {
+      setObjectivesText(objs.slice(0, 3).join("\n"));
+    }
   }
 
   async function handleAiDraft() {
@@ -291,7 +337,7 @@ export default function ProcurementBundlePage() {
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <PackageCheck className="h-4 w-4 text-[#1D4ED8]" />
           <span className="font-bold text-[#0F172A]">ชุดเอกสารที่สร้างในคราวเดียว:</span>
-          {["1. บันทึกข้อความ", "2. ใบ สผ.1 (พ.101)", "3. แผนโครงการฝึก (.XLSX)", "4. ร่าง TOR (.XLSX)", "5. ใบสั่งซื้อชั่วคราว (เลือกได้)"].map((step) => (
+          {["1. บันทึกข้อความ", "2. ใบ สผ.1 (พ.101)", "3. แผนโครงการฝึก (.XLSX)", "3b. แผนการใช้วัสดุ (.DOCX)", "4. ร่าง TOR (.XLSX)", "5. ใบสั่งซื้อชั่วคราว (เลือกได้)"].map((step) => (
             <span key={step} className="rounded border border-[#CBD5E1] bg-[#F8FAFC] px-2 py-0.5 text-[11px] font-medium text-[#334155]">
               {step}
             </span>
@@ -470,6 +516,78 @@ export default function ProcurementBundlePage() {
                   <label className="mb-1 block font-semibold text-[#475569]">จำนวนหน่วยผลผลิต</label>
                   <input type="text" value={outcomeUnits} onChange={(e) => setOutcomeUnits(e.target.value)} className="ledger-input py-1.5 text-xs" />
                 </div>
+              </div>
+
+              <div className="rounded-lg border border-sky-200 bg-sky-50/70 p-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-[#0F172A]">1b. แผนการใช้วัสดุ (.DOCX) — ดึงข้อมูลรายวิชาจากคลัง</span>
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-medium text-[#334155]">
+                    <input
+                      type="checkbox"
+                      checked={includeMaterialPlan}
+                      onChange={(e) => setIncludeMaterialPlan(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+                    />
+                    สร้างไฟล์ 3b. แผนการใช้วัสดุ (.DOCX)
+                  </label>
+                </div>
+
+                {includeMaterialPlan && (
+                  <div className="space-y-2.5">
+                    <div>
+                      <label className="mb-1 block font-semibold text-[#475569]">เลือกรายวิชาจากคลังรายวิชา (Auto-fill ข้อมูลรายวิชาและแผนรายสัปดาห์)</label>
+                      <select
+                        value={selectedCourseId}
+                        onChange={(e) => {
+                          const cid = e.target.value;
+                          setSelectedCourseId(cid);
+                          const found = courses.find((c) => c.id === cid);
+                          if (found) applyCourseForMaterialPlan(found);
+                        }}
+                        className="ledger-input bg-white py-1.5 text-xs"
+                      >
+                        <option value="">-- เลือกรายวิชาจากคลัง (หรือกรอกเองด้านล่าง) --</option>
+                        {courses.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.course_code} — {c.course_name} ({c.department_name || "ไม่ระบุแผนก"})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                      <div>
+                        <label className="mb-1 block font-semibold text-[#475569]">รหัสวิชา</label>
+                        <input
+                          type="text"
+                          value={courseCode}
+                          onChange={(e) => setCourseCode(e.target.value)}
+                          placeholder="เช่น 20100-1001"
+                          className="ledger-input bg-white py-1.5 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block font-semibold text-[#475569]">ชื่อรายวิชา</label>
+                        <input
+                          type="text"
+                          value={courseName}
+                          onChange={(e) => setCourseName(e.target.value)}
+                          placeholder="เช่น งานฝึกฝีมือ"
+                          className="ledger-input bg-white py-1.5 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block font-semibold text-[#475569]">จำนวนคาบ/สัปดาห์</label>
+                        <input
+                          type="text"
+                          value={periodsPerWeek}
+                          onChange={(e) => setPeriodsPerWeek(e.target.value)}
+                          placeholder="เช่น 4"
+                          className="ledger-input bg-white py-1.5 text-xs"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">

@@ -56,6 +56,10 @@ def test_sp_bundle_render_formulas_zip_and_workflow():
         "deputy_title": "รองผู้อำนวยการฝ่ายวิชาการ (รักษาการ)",
         "tor_chair_name": "นายประธาน ร่างทีโออาร์",
         "include_urgent_po": True,
+        "include_material_plan": True,
+        "course_code": "20100-1001",
+        "course_name": "งานฝึกฝีมือ",
+        "periods_per_week": "4",
         "items": [
             {"name": "สายสัญญาณ UTP Cat6", "spec": "ยาว 100 เมตร", "qty": 2, "unit": "กล่อง", "unit_price": 1200, "note": ""},
             {"name": "หัว RJ45", "spec": "แพ็ค 10 ชิ้น", "qty": 5, "unit": "แพ็ค", "unit_price": 150, "note": ""},
@@ -71,7 +75,7 @@ def test_sp_bundle_render_formulas_zip_and_workflow():
     data = r.json()
     assert data["grand_total"] == 3150.0
     assert data["grand_total_thai_text"] == "สามพันหนึ่งร้อยห้าสิบบาทถ้วน"
-    assert len(data["bundle_files"]) == 5
+    assert len(data["bundle_files"]) == 6
 
     # Verify 1_approval_memo.docx keeps bold 20pt ONLY on labels and 16pt regular on values
     approval_file = RENDERED_DIR / data["bundle_files"][0]["filename"]
@@ -106,10 +110,16 @@ def test_sp_bundle_render_formulas_zip_and_workflow():
     assert doc_sp1.paragraphs[12].paragraph_format.page_break_before is True
     assert len(doc_sp1.paragraphs) == 16
 
-    # Verify generated .xlsx preserves formulas & ZIP download works
+    # Verify generated .xlsx preserves formulas & 3b_material_plan.docx Table 4 items
     plan_file = RENDERED_DIR / data["bundle_files"][2]["filename"]
-    tor_file = RENDERED_DIR / data["bundle_files"][3]["filename"]
-    assert plan_file.exists() and tor_file.exists()
+    mat_file = RENDERED_DIR / data["bundle_files"][3]["filename"]
+    tor_file = RENDERED_DIR / data["bundle_files"][4]["filename"]
+    assert plan_file.exists() and mat_file.exists() and tor_file.exists()
+    assert data["bundle_files"][3]["key"] == "material_plan"
+    doc_mat = docx.Document(mat_file)
+    mat_t4_text = "\n".join(c.text for row in doc_mat.tables[4].rows for c in row.cells)
+    assert "สายสัญญาณ UTP Cat6" in mat_t4_text
+    assert "หัว RJ45" in mat_t4_text
 
     wb_plan = openpyxl.load_workbook(plan_file, data_only=False)
     ws_plan = wb_plan.active
@@ -156,7 +166,8 @@ def test_sp_bundle_render_formulas_zip_and_workflow():
     assert "application/zip" in zip_resp.headers["content-type"]
     zpath = RENDERED_DIR / data["zip_filename"]
     with zipfile.ZipFile(zpath, "r") as zf:
-        assert len(zf.namelist()) == 5
+        assert len(zf.namelist()) == 6
+        assert any("แผนการใช้วัสดุ.docx" in n for n in zf.namelist())
 
     # Save & submit SP bundle to /approvals (PDF+Calc rendering tested directly in Docker)
     s_res = client.post(
