@@ -418,10 +418,114 @@ def build_memo(payload: dict[str, Any], org: dict[str, Any]) -> docx.Document:
     return doc
 
 
+def _enable_thai_page_numbers_header(doc: docx.Document) -> None:
+    """Enable centered Thai-numeral page numbers in the header from page 2 onward."""
+    for sec in doc.sections:
+        sec.different_first_page_header_footer = True
+        if not sec.header_distance or sec.header_distance < Cm(0.75):
+            sec.header_distance = Cm(0.8)
+
+        sect_pr = sec._sectPr
+        for old in sect_pr.findall(qn("w:pgNumType")):
+            sect_pr.remove(old)
+        sect_pr.append(parse_xml(f'<w:pgNumType {nsdecls("w")} w:fmt="thai"/>'))
+
+        hdr = sec.header
+        if hdr.tables:
+            p = hdr.add_paragraph()
+        else:
+            for extra in list(hdr.paragraphs)[1:]:
+                remove_paragraph(extra)
+            p = hdr.paragraphs[0]
+            clear_paragraph_runs(p)
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(0)
+
+        for fld_type in ("begin", "instrText", "separate", "end"):
+            run = p.add_run()
+            set_run_font(run, size_pt=16)
+            if fld_type == "begin":
+                run._r.append(parse_xml(f'<w:fldChar {nsdecls("w")} w:fldCharType="begin"/>'))
+            elif fld_type == "instrText":
+                el = parse_xml(f'<w:instrText {nsdecls("w")} xml:space="preserve"> PAGE </w:instrText>')
+                run._r.append(el)
+            elif fld_type == "separate":
+                run._r.append(parse_xml(f'<w:fldChar {nsdecls("w")} w:fldCharType="separate"/>'))
+            else:
+                run._r.append(parse_xml(f'<w:fldChar {nsdecls("w")} w:fldCharType="end"/>'))
+
+
+def _split_thai_name_parts(full_name: str) -> tuple[str, str]:
+    """Split a Thai full name into (title+first_name, last_name)."""
+    cleaned = " ".join((full_name or "").strip().split())
+    if not cleaned:
+        return ("", "")
+    parts = cleaned.split(" ")
+    if len(parts) == 2:
+        return (parts[0], parts[1])
+    return (cleaned, "")
+
+
+def _append_order_committee_table(doc: docx.Document, after_p, c_idx: int, members: list[dict[str, Any]]):
+    """Insert a 4-column borderless member table aligned at 2.5 cm left indent."""
+    tbl = doc.add_table(rows=len(members), cols=4)
+    tbl.autofit = False
+    remove_borderless_table_borders(tbl)
+    tbl_pr = tbl._tbl.tblPr
+    for old_tag in ("w:tblInd", "w:tblLayout", "w:tblCellMar"):
+        for old in tbl_pr.findall(qn(old_tag)):
+            tbl_pr.remove(old)
+    tbl_pr.append(parse_xml(f'<w:tblInd {nsdecls("w")} w:w="1417" w:type="dxa"/>'))
+    tbl_pr.append(parse_xml(f'<w:tblLayout {nsdecls("w")} w:type="fixed"/>'))
+    tbl_pr.append(
+        parse_xml(
+            f'<w:tblCellMar {nsdecls("w")}>'
+            '<w:top w:w="15" w:type="dxa"/>'
+            '<w:left w:w="25" w:type="dxa"/>'
+            '<w:bottom w:w="15" w:type="dxa"/>'
+            '<w:right w:w="25" w:type="dxa"/>'
+            "</w:tblCellMar>"
+        )
+    )
+
+    col_widths = (Cm(1.1), Cm(3.4), Cm(3.7), Cm(4.8))
+    c_th = to_thai_digits(str(c_idx))
+
+    for m_idx, mem in enumerate(members, start=1):
+        row = tbl.rows[m_idx - 1]
+        tr_pr = row._tr.get_or_add_trPr()
+        tr_pr.append(parse_xml(f'<w:cantSplit {nsdecls("w")}/>'))
+
+        first = to_thai_digits((mem.get("first_name") or "").strip())
+        last = to_thai_digits((mem.get("last_name") or "").strip())
+        if not first and mem.get("name"):
+            first, last = _split_thai_name_parts(to_thai_digits(str(mem.get("name") or "")))
+        role = to_thai_digits((mem.get("role") or "").strip())
+        item_no = f"{c_th}.{to_thai_digits(str(m_idx))}"
+        values = (item_no, first, last, role)
+
+        for col_i, val in enumerate(values):
+            cell = row.cells[col_i]
+            cell.width = col_widths[col_i]
+            p = cell.paragraphs[0]
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            p.paragraph_format.space_before = Pt(0)
+            p.paragraph_format.space_after = Pt(0)
+            p.paragraph_format.line_spacing = 1.0
+            run = p.add_run(val)
+            set_run_font(run, size_pt=16, bold=False, underline=False)
+
+    after_p._element.addnext(tbl._tbl)
+    anchor = OxmlElement("w:p")
+    tbl._tbl.addnext(anchor)
+    return docx.text.paragraph.Paragraph(anchor, after_p._parent)
+
+
 def build_order(payload: dict[str, Any], org: dict[str, Any]) -> docx.Document:
     doc = docx.Document(_tpl_path("order.docx"))
-    # Keep P00..P08 (Garuda, spacing, title, order no, subject, VML line) and remove P09 onward
-    for p in list(doc.paragraphs[9:]):
+    # Remove P08 (VML separator line) and P09+ so the order follows the clean CRIC format
+    for p in list(doc.paragraphs[8:]):
         remove_paragraph(p)
 
     org_name = org["organization_name"]
@@ -438,9 +542,9 @@ def build_order(payload: dict[str, Any], org: dict[str, Any]) -> docx.Document:
     subject = to_thai_digits((payload.get("subject") or "").strip())
     set_paragraph_text(doc.paragraphs[5], [(f"คำสั่ง{org_name}", 16, False, False)], alignment=WD_ALIGN_PARAGRAPH.CENTER, before_pt=6)
     set_paragraph_text(doc.paragraphs[6], [(f"ที่  {order_no}", 16, False, False)], alignment=WD_ALIGN_PARAGRAPH.CENTER)
-    set_paragraph_text(doc.paragraphs[7], [(f"เรื่อง  {subject}", 16, False, False)], alignment=WD_ALIGN_PARAGRAPH.CENTER)
+    set_paragraph_text(doc.paragraphs[7], [(f"เรื่อง  {subject}", 16, False, False)], alignment=WD_ALIGN_PARAGRAPH.CENTER, after_pt=6)
 
-    cur = doc.paragraphs[8]  # VML horizontal line
+    cur = doc.paragraphs[7]
     body_paras = _normalize_body_paragraphs(payload.get("paragraphs", []))
     for idx, para_text in enumerate(body_paras):
         cur = insert_paragraph_after(cur)
@@ -453,12 +557,60 @@ def build_order(payload: dict[str, Any], org: dict[str, Any]) -> docx.Document:
             first_line_cm=2.5,
         )
 
+    committees = payload.get("committees") or []
+    for c_idx, comm in enumerate(committees, start=1):
+        if not isinstance(comm, dict):
+            continue
+        c_title = to_thai_digits((comm.get("title") or "").strip())
+        c_duties = to_thai_digits((comm.get("duties") or "").strip())
+        c_duty_items = [to_thai_digits(str(d).strip()) for d in (comm.get("duty_items") or []) if str(d).strip()]
+        c_members = [m for m in (comm.get("members") or []) if isinstance(m, dict) and ((m.get("first_name") or "").strip() or (m.get("name") or "").strip())]
+
+        if c_title:
+            cur = insert_paragraph_after(cur)
+            set_paragraph_text(
+                cur,
+                [(f"{to_thai_digits(str(c_idx))}. {c_title}", 16, True, False)],
+                alignment=WD_ALIGN_PARAGRAPH.LEFT,
+                before_pt=8,
+                after_pt=0,
+                first_line_cm=2.5,
+            )
+            cur.paragraph_format.keep_with_next = True
+
+        if c_duties:
+            cur = insert_paragraph_after(cur)
+            set_paragraph_text(
+                cur,
+                [("มีหน้าที่  ", 16, True, True), (c_duties, 16, False, False)],
+                alignment=WD_ALIGN_PARAGRAPH.THAI_JUSTIFY,
+                before_pt=2,
+                after_pt=2,
+                first_line_cm=2.5,
+            )
+
+        if c_members:
+            cur = _append_order_committee_table(doc, cur, c_idx, c_members)
+            cur.paragraph_format.space_before = Pt(0)
+            cur.paragraph_format.space_after = Pt(0)
+
+        for d_idx, d_item in enumerate(c_duty_items, start=1):
+            cur = insert_paragraph_after(cur)
+            set_paragraph_text(
+                cur,
+                [(f"({to_thai_digits(str(d_idx))}) {d_item}", 16, False, False)],
+                alignment=WD_ALIGN_PARAGRAPH.THAI_JUSTIFY,
+                before_pt=2,
+                after_pt=0,
+                first_line_cm=2.5,
+            )
+
     eff_line = to_thai_digits((payload.get("effective_line") or "ทั้งนี้ ตั้งแต่บัดนี้เป็นต้นไป").strip())
     cur = insert_paragraph_after(cur)
     set_paragraph_text(
         cur,
         [(eff_line, 16, False, False)],
-        alignment=WD_ALIGN_PARAGRAPH.LEFT,
+        alignment=WD_ALIGN_PARAGRAPH.THAI_JUSTIFY if len(eff_line) > 55 else WD_ALIGN_PARAGRAPH.LEFT,
         before_pt=6,
         after_pt=0,
         first_line_cm=2.5,
@@ -483,6 +635,7 @@ def build_order(payload: dict[str, Any], org: dict[str, Any]) -> docx.Document:
         signature_image_path=signer.get("signature_image_path"),
     )
     apply_speed_and_secrecy(doc, payload.get("speed", ""), payload.get("secrecy", ""))
+    _enable_thai_page_numbers_header(doc)
     return doc
 
 

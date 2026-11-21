@@ -476,7 +476,7 @@ def test_plan_user_settings_multi_units_head_toggle_and_admin_crud():
         pub = client.get("/v1/settings/public")
         assert pub.status_code == 200
         divs = pub.json()["org_profile"]["divisions"]
-        assert "ฝว." in divs and "แผนกวิชาเทคโนโลยีสารสนเทศ" in divs["ฝว."]["units"]
+        assert "ฝว." in divs and "แผนกวิชาเทคโนโลยีธุรกิจดิจิทัล" in divs["ฝว."]["units"]
 
         # 2. Admin creates a multi-division/multi-unit TEACHER user
         create_res = client.post(

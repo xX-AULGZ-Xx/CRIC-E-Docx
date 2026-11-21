@@ -24,6 +24,43 @@ export type DocType =
   | "post_teaching_online"
   | "custom_template";
 
+export interface DraftPersonnelRecord {
+  id: string;
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  position: string;
+  division_code: string;
+  units: string[];
+}
+
+export interface DraftPersonnelGroup {
+  id: string;
+  label: string;
+  default_title: string;
+  default_duties: string;
+  members: Array<{ person_id: string; role: string }>;
+}
+
+export interface DraftRosterResponse {
+  source_order: string;
+  personnel: DraftPersonnelRecord[];
+  groups: DraftPersonnelGroup[];
+}
+
+export interface OrderCommitteeMember {
+  first_name: string;
+  last_name: string;
+  role: string;
+}
+
+export interface OrderCommittee {
+  title: string;
+  duties: string;
+  duty_items?: string[];
+  members: OrderCommitteeMember[];
+}
+
 export interface TemplateFieldSchema {
   key: string;
   label: string;
@@ -836,6 +873,7 @@ export const api = {
   // Admin & Settings
   getPublicSettings: () =>
     apiFetch<{ org_profile: OrgProfile; default_font: string; auto_preview_default: boolean; ai_copilot_enabled: boolean }>("/v1/settings/public"),
+  getDraftRoster: () => apiFetch<DraftRosterResponse>("/v1/settings/draft-roster"),
   getAdminSettings: () => apiFetch<AdminSettingsResponse>("/v1/settings/admin"),
   updateOrgProfile: (body: OrgProfile) =>
     apiFetch<{ ok: boolean; org_profile: OrgProfile }>("/v1/settings/org-profile", { method: "PUT", body: JSON.stringify(body) }),

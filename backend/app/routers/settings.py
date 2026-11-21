@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import time
@@ -198,6 +199,17 @@ def get_public_settings(x_user_email: str | None = Header(default=None)):
         "auto_preview_default": bool(font_row.get("auto_preview_default", True)),
         "ai_copilot_enabled": bool(ai_cfg.get("enabled", True)),
     }
+
+
+@router.get("/draft-roster")
+def get_draft_roster(x_user_email: str | None = Header(default=None)):
+    """Return read-only personnel & preset groups roster from the 1 Oct 2569 order for drafting."""
+    resolve_current_user(x_user_email)
+    roster_path = Path(__file__).resolve().parent.parent.parent / "resources" / "order_personnel_roster.json"
+    if not roster_path.exists():
+        return {"source_order": "", "personnel": [], "groups": []}
+    with roster_path.open("r", encoding="utf-8") as fh:
+        return json.load(fh)
 
 
 @router.get("/admin")

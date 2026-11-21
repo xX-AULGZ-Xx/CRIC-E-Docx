@@ -662,3 +662,66 @@ def test_division_scoped_approvals_and_counts():
     fb_only = client.get("/v1/documents?division_code=ฝบ.", headers=saraban_h)
     assert fb_only.status_code == 200
     assert all(d["division_code"] == "ฝบ." for d in fb_only.json()["documents"])
+
+
+def test_order_committee_layout_and_draft_roster():
+    import io
+    import docx
+
+    roster_r = client.get("/v1/settings/draft-roster", headers=HEADERS)
+    assert roster_r.status_code == 200
+    roster = roster_r.json()
+    assert len(roster["personnel"]) >= 60
+    assert any(p["full_name"] == "นายยุทธการ ตั้งปัญญาศักดิ์" for p in roster["personnel"])
+    assert any(g["id"] == "exec" for g in roster["groups"])
+
+    ren = client.post(
+        "/v1/render",
+        headers=HEADERS,
+        json={
+            "convert_pdf": False,
+            "payload": {
+                "type": "order",
+                "order_number": "523/2569",
+                "subject": "แต่งตั้งคณะกรรมการดำเนินการจัดประกวดสิ่งประดิษฐ์ของคนรุ่นใหม่",
+                "paragraphs": [
+                    "ด้วยวิทยาลัยการอาชีพเชียงราย มีความประสงค์จะดำเนินการจัดทำโครงการประกวดนวัตกรรมสิ่งประดิษฐ์",
+                    "อาศัยอำนาจตามระเบียบสำนักงานคณะกรรมการการอาชีวศึกษา จึงแต่งตั้งคณะกรรมการ ดังต่อไปนี้",
+                ],
+                "committees": [
+                    {
+                        "title": "คณะกรรมการฝ่ายอำนวยการ",
+                        "duties": "ให้คำปรึกษา ชี้แนะ ควบคุม ดูแลความสะดวกในการดำเนินงาน",
+                        "members": [
+                            {"first_name": "นายยุทธการ", "last_name": "ตั้งปัญญาศักดิ์", "role": "ประธานกรรมการ"},
+                            {"first_name": "นางสาวอรวรรณ", "last_name": "แสงดาว", "role": "กรรมการ"},
+                        ],
+                    }
+                ],
+                "effective_line": "ทั้งนี้ ให้คณะกรรมการที่ได้รับการแต่งตั้ง ปฏิบัติหน้าที่อย่างเต็มกำลังความสามารถ ต่อไป",
+                "order_date": "2026-10-30",
+            },
+        },
+    )
+    assert ren.status_code == 200, ren.text
+    docx_bytes = client.get(ren.json()["docx_url"]).content
+    doc = docx.Document(io.BytesIO(docx_bytes))
+
+    # No VML separator line under เรื่อง
+    assert "pict" not in doc.paragraphs[8]._p.xml
+    # Thai page numbers enabled from page 2 onward
+    sec = doc.sections[0]
+    assert sec.different_first_page_header_footer is True
+    assert 'w:fmt="thai"' in sec._sectPr.xml
+    assert "PAGE" in sec.header.paragraphs[0]._p.xml
+
+    # Bold committee title, bold+underline มีหน้าที่, and 4-column borderless table
+    bold_titles = [p for p in doc.paragraphs if "๑. คณะกรรมการฝ่ายอำนวยการ" in p.text]
+    assert bold_titles and bold_titles[0].runs[0].bold is True
+    duty_paras = [p for p in doc.paragraphs if "มีหน้าที่" in p.text]
+    assert duty_paras and duty_paras[0].runs[0].bold is True and duty_paras[0].runs[0].underline is True
+    assert len(doc.tables) == 1
+    assert doc.tables[0].rows[0].cells[0].text == "๑.๑"
+    assert doc.tables[0].rows[0].cells[1].text == "นายยุทธการ"
+    assert doc.tables[0].rows[0].cells[2].text == "ตั้งปัญญาศักดิ์"
+    assert doc.tables[0].rows[0].cells[3].text == "ประธานกรรมการ"

@@ -6,13 +6,27 @@ import {
   CheckCircle2,
   Eye,
   FileCheck2,
+  Plus,
   Send,
   Sparkles,
+  Trash2,
+  Users,
   Wand2,
 } from "lucide-react";
 import { DocumentPreviewPanel } from "@/components/DocumentPreviewPanel";
 import { ResponsivePreviewModal } from "@/components/ResponsivePreviewModal";
-import { api, API_BASE, DocType, OrgProfile, RenderResult, UserProfile, ValidationIssue } from "@/lib/api";
+import {
+  api,
+  API_BASE,
+  DocType,
+  DraftPersonnelGroup,
+  DraftPersonnelRecord,
+  OrderCommittee,
+  OrgProfile,
+  RenderResult,
+  UserProfile,
+  ValidationIssue,
+} from "@/lib/api";
 import { toastError, toastInfo, toastSuccess } from "@/lib/swal";
 
 const DOC_TYPES: Array<{ id: DocType; label: string }> = [
@@ -59,6 +73,9 @@ export default function DraftStudioPage() {
   );
   const [closingPurpose, setClosingPurpose] = useState("จึงเรียนมาเพื่อโปรดพิจารณาอนุมัติ");
   const [effectiveLine, setEffectiveLine] = useState("ทั้งนี้ ตั้งแต่บัดนี้เป็นต้นไป");
+  const [orderCommittees, setOrderCommittees] = useState<OrderCommittee[]>([]);
+  const [draftPersonnel, setDraftPersonnel] = useState<DraftPersonnelRecord[]>([]);
+  const [draftGroups, setDraftGroups] = useState<DraftPersonnelGroup[]>([]);
 
   // Meeting fields (agenda / minutes)
   const [meetingTitle, setMeetingTitle] = useState("คณะกรรมการบริหารวิทยาลัยการอาชีพเชียงราย");
@@ -148,6 +165,13 @@ export default function DraftStudioPage() {
     window.addEventListener("cric-profile-updated", applyMyProfile);
 
     api.listUsers().then((r) => setUsers(r.users)).catch(() => {});
+    api
+      .getDraftRoster()
+      .then((r) => {
+        setDraftPersonnel(r.personnel || []);
+        setDraftGroups(r.groups || []);
+      })
+      .catch(() => {});
     api.getAiSettings().then((s) => setAiProvider(s.provider)).catch(() => {});
     api
       .getPublicSettings()
@@ -235,11 +259,19 @@ export default function DraftStudioPage() {
     }
 
     if (docType === "order") {
+      const cleanCommittees = orderCommittees
+        .map((c) => ({
+          title: c.title.trim(),
+          duties: c.duties.trim(),
+          members: c.members.filter((m) => m.first_name.trim() || m.last_name.trim()),
+        }))
+        .filter((c) => c.title || c.duties || c.members.length > 0);
       return {
         ...common,
         order_number: docNumber,
         subject,
         paragraphs,
+        committees: cleanCommittees,
         effective_line: effectiveLine,
         order_date: dateStr,
         signer: directorSigner,
@@ -672,9 +704,295 @@ export default function DraftStudioPage() {
                   </div>
 
                   {docType === "order" ? (
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold text-[#475569]">วันที่มีผลบังคับใช้</label>
-                      <input type="text" value={effectiveLine} onChange={(e) => setEffectiveLine(e.target.value)} className="ledger-input" />
+                    <div className="space-y-4">
+                      <div className="rounded-lg border border-sky-200 bg-sky-50/60 p-3.5">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5">
+                            <Users className="h-4 w-4 text-sky-700" />
+                            <span className="text-xs font-bold text-[#0F172A]">
+                              คณะกรรมการ / ชุดปฏิบัติงาน (แต่งตั้งคณะกรรมการ)
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            {draftGroups.length > 0 && (
+                              <select
+                                value=""
+                                onChange={(e) => {
+                                  const gid = e.target.value;
+                                  const grp = draftGroups.find((g) => g.id === gid);
+                                  if (!grp) return;
+                                  const members = grp.members.map((gm) => {
+                                    const p = draftPersonnel.find((x) => x.id === gm.person_id);
+                                    return {
+                                      first_name: p?.first_name || "",
+                                      last_name: p?.last_name || "",
+                                      role: gm.role || "กรรมการ",
+                                    };
+                                  });
+                                  setOrderCommittees((prev) => [
+                                    ...prev,
+                                    { title: grp.default_title, duties: grp.default_duties, members },
+                                  ]);
+                                  toastSuccess("เพิ่มชุดคณะกรรมการแล้ว", grp.label);
+                                }}
+                                className="rounded-md border border-sky-300 bg-white px-2.5 py-1 text-xs font-medium text-[#0F172A] focus:border-[#1D4ED8] focus:outline-none"
+                              >
+                                <option value="">+ เพิ่มชุดจากคำสั่ง ๑ ต.ค. ๖๙...</option>
+                                {draftGroups.map((g) => (
+                                  <option key={g.id} value={g.id}>
+                                    {g.label}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setOrderCommittees((prev) => [
+                                  ...prev,
+                                  {
+                                    title: "",
+                                    duties: "",
+                                    members: [{ first_name: "", last_name: "", role: "ประธานกรรมการ" }],
+                                  },
+                                ])
+                              }
+                              className="inline-flex items-center gap-1 rounded-md bg-[#1D4ED8] px-2.5 py-1 text-xs font-semibold text-white hover:bg-[#1E40AF]"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                              เพิ่มชุดคณะกรรมการ
+                            </button>
+                          </div>
+                        </div>
+
+                        {orderCommittees.length === 0 ? (
+                          <p className="text-xs text-[#64748B]">
+                            ยังไม่ได้เพิ่มชุดคณะกรรมการ (หากเป็นคำสั่งทั่วไปสามารถเว้นว่างได้ หรือกด &quot;+ เพิ่มชุดคณะกรรมการ&quot; / เลือกชุดสำเร็จรูปจากคำสั่ง ๑ ต.ค. ๖๙)
+                          </p>
+                        ) : (
+                          <div className="space-y-3">
+                            {orderCommittees.map((comm, cIdx) => (
+                              <div key={cIdx} className="rounded-md border border-[#CBD5E1] bg-white p-3">
+                                <div className="mb-2 flex items-center justify-between gap-2">
+                                  <span className="text-xs font-bold text-[#1E3A8A]">ชุดที่ {cIdx + 1}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setOrderCommittees((prev) => prev.filter((_, i) => i !== cIdx))
+                                    }
+                                    className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                    ลบชุดนี้
+                                  </button>
+                                </div>
+
+                                <div className="mb-2 grid grid-cols-1 gap-2">
+                                  <input
+                                    type="text"
+                                    placeholder="ชื่อคณะกรรมการ เช่น คณะกรรมการฝ่ายอำนวยการ"
+                                    value={comm.title}
+                                    onChange={(e) =>
+                                      setOrderCommittees((prev) =>
+                                        prev.map((c, i) => (i === cIdx ? { ...c, title: e.target.value } : c))
+                                      )
+                                    }
+                                    className="ledger-input py-1.5 text-xs font-semibold"
+                                  />
+                                  <textarea
+                                    rows={2}
+                                    placeholder="มีหน้าที่ (เช่น ให้คำปรึกษา ชี้แนะ ควบคุม ดูแลความสะดวกในการดำเนินงาน...)"
+                                    value={comm.duties}
+                                    onChange={(e) =>
+                                      setOrderCommittees((prev) =>
+                                        prev.map((c, i) => (i === cIdx ? { ...c, duties: e.target.value } : c))
+                                      )
+                                    }
+                                    className="ledger-input prose-saraban py-1.5 text-xs"
+                                  />
+                                </div>
+
+                                <div className="space-y-1.5">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[11px] font-semibold text-[#475569]">
+                                      รายชื่อกรรมการ ({comm.members.length} คน — จัดคอลัมน์ตรงกันใน Word)
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setOrderCommittees((prev) =>
+                                          prev.map((c, i) =>
+                                            i === cIdx
+                                              ? {
+                                                  ...c,
+                                                  members: [
+                                                    ...c.members,
+                                                    { first_name: "", last_name: "", role: "กรรมการ" },
+                                                  ],
+                                                }
+                                              : c
+                                          )
+                                        )
+                                      }
+                                      className="inline-flex items-center gap-1 rounded border border-[#CBD5E1] bg-[#F8FAFC] px-2 py-0.5 text-[11px] font-semibold text-[#0F172A] hover:bg-slate-100"
+                                    >
+                                      <Plus className="h-3 w-3" />
+                                      เพิ่มรายชื่อ
+                                    </button>
+                                  </div>
+
+                                  {comm.members.map((mem, mIdx) => (
+                                    <div
+                                      key={mIdx}
+                                      className="grid grid-cols-1 gap-1.5 rounded border border-slate-200 bg-slate-50/70 p-2 sm:grid-cols-12 sm:items-center"
+                                    >
+                                      <select
+                                        value=""
+                                        onChange={(e) => {
+                                          const pid = e.target.value;
+                                          const p = draftPersonnel.find((x) => x.id === pid);
+                                          if (!p) return;
+                                          setOrderCommittees((prev) =>
+                                            prev.map((c, i) =>
+                                              i === cIdx
+                                                ? {
+                                                    ...c,
+                                                    members: c.members.map((m, j) =>
+                                                      j === mIdx
+                                                        ? { ...m, first_name: p.first_name, last_name: p.last_name }
+                                                        : m
+                                                    ),
+                                                  }
+                                                : c
+                                            )
+                                          );
+                                        }}
+                                        className="ledger-input bg-white py-1 text-[11px] sm:col-span-3"
+                                        title="เลือกบุคลากรจากคำสั่ง ๑ ต.ค. ๖๙"
+                                      >
+                                        <option value="">-- เลือกบุคลากร --</option>
+                                        {draftPersonnel.map((p) => (
+                                          <option key={p.id} value={p.id}>
+                                            {p.full_name}
+                                          </option>
+                                        ))}
+                                      </select>
+                                      <input
+                                        type="text"
+                                        placeholder="คำนำหน้า+ชื่อ"
+                                        value={mem.first_name}
+                                        onChange={(e) =>
+                                          setOrderCommittees((prev) =>
+                                            prev.map((c, i) =>
+                                              i === cIdx
+                                                ? {
+                                                    ...c,
+                                                    members: c.members.map((m, j) =>
+                                                      j === mIdx ? { ...m, first_name: e.target.value } : m
+                                                    ),
+                                                  }
+                                                : c
+                                            )
+                                          )
+                                        }
+                                        className="ledger-input bg-white py-1 text-xs sm:col-span-3"
+                                      />
+                                      <input
+                                        type="text"
+                                        placeholder="นามสกุล"
+                                        value={mem.last_name}
+                                        onChange={(e) =>
+                                          setOrderCommittees((prev) =>
+                                            prev.map((c, i) =>
+                                              i === cIdx
+                                                ? {
+                                                    ...c,
+                                                    members: c.members.map((m, j) =>
+                                                      j === mIdx ? { ...m, last_name: e.target.value } : m
+                                                    ),
+                                                  }
+                                                : c
+                                            )
+                                          )
+                                        }
+                                        className="ledger-input bg-white py-1 text-xs sm:col-span-2"
+                                      />
+                                      <input
+                                        type="text"
+                                        list="order-committee-roles"
+                                        placeholder="ตำแหน่งในคณะฯ"
+                                        value={mem.role}
+                                        onChange={(e) =>
+                                          setOrderCommittees((prev) =>
+                                            prev.map((c, i) =>
+                                              i === cIdx
+                                                ? {
+                                                    ...c,
+                                                    members: c.members.map((m, j) =>
+                                                      j === mIdx ? { ...m, role: e.target.value } : m
+                                                    ),
+                                                  }
+                                                : c
+                                            )
+                                          )
+                                        }
+                                        className="ledger-input bg-white py-1 text-xs sm:col-span-3"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setOrderCommittees((prev) =>
+                                            prev.map((c, i) =>
+                                              i === cIdx
+                                                ? { ...c, members: c.members.filter((_, j) => j !== mIdx) }
+                                                : c
+                                            )
+                                          )
+                                        }
+                                        className="inline-flex items-center justify-center rounded p-1 text-red-500 hover:bg-red-50 sm:col-span-1"
+                                        title="ลบรายชื่อ"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        <datalist id="order-committee-roles">
+                          <option value="ประธานกรรมการ" />
+                          <option value="รองประธานกรรมการ" />
+                          <option value="กรรมการ" />
+                          <option value="กรรมการและเลขานุการ" />
+                          <option value="กรรมการและผู้ช่วยเลขานุการ" />
+                        </datalist>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold text-[#475569]">เลือกรูปแบบข้อความปิดท้ายคำสั่ง</label>
+                          <select
+                            value=""
+                            onChange={(e) => {
+                              if (e.target.value) setEffectiveLine(e.target.value);
+                            }}
+                            className="ledger-input"
+                          >
+                            <option value="">-- เลือกข้อความมาตรฐาน --</option>
+                            <option value="ทั้งนี้ ตั้งแต่บัดนี้เป็นต้นไป">ทั้งนี้ ตั้งแต่บัดนี้เป็นต้นไป</option>
+                            <option value="ทั้งนี้ ให้คณะกรรมการที่ได้รับการแต่งตั้ง ปฏิบัติหน้าที่อย่างเต็มกำลังความสามารถ เสียสละ เพื่อให้การดำเนินการเป็นไปด้วยความเรียบร้อย ราบรื่น บรรลุวัตถุประสงค์ และบังเกิดผลดีต่อทางราชการ ต่อไป">
+                              ทั้งนี้ ให้คณะกรรมการที่ได้รับการแต่งตั้ง ปฏิบัติหน้าที่...
+                            </option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold text-[#475569]">วันที่มีผลบังคับใช้ / ข้อความปิดท้าย</label>
+                          <input type="text" value={effectiveLine} onChange={(e) => setEffectiveLine(e.target.value)} className="ledger-input" />
+                        </div>
+                      </div>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -710,7 +1028,29 @@ export default function DraftStudioPage() {
                   {docType === "memo" && (
                     <div className="grid grid-cols-1 gap-3 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] p-3.5 sm:grid-cols-2">
                       <div>
-                        <label className="mb-1 block text-xs font-semibold text-[#475569]">ผู้เสนอ (ระดับ 1)</label>
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <label className="block text-xs font-semibold text-[#475569]">ผู้เสนอ (ระดับ 1)</label>
+                          {draftPersonnel.length > 0 && (
+                            <select
+                              value=""
+                              onChange={(e) => {
+                                const p = draftPersonnel.find((x) => x.id === e.target.value);
+                                if (p) {
+                                  setSigner1Name(p.full_name);
+                                  setSigner1Title(p.position);
+                                }
+                              }}
+                              className="max-w-[165px] rounded border border-[#CBD5E1] bg-white px-1.5 py-0.5 text-[11px] text-[#334155]"
+                            >
+                              <option value="">ดึงจากคำสั่ง ๑ ต.ค. ๖๙</option>
+                              {draftPersonnel.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.full_name}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
                         <input
                           type="text"
                           value={signer1Name}
@@ -725,7 +1065,29 @@ export default function DraftStudioPage() {
                         />
                       </div>
                       <div>
-                        <label className="mb-1 block text-xs font-semibold text-[#475569]">ผู้รับรอง (ระดับ 2 - ถ้ามี)</label>
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <label className="block text-xs font-semibold text-[#475569]">ผู้รับรอง (ระดับ 2 - ถ้ามี)</label>
+                          {draftPersonnel.length > 0 && (
+                            <select
+                              value=""
+                              onChange={(e) => {
+                                const p = draftPersonnel.find((x) => x.id === e.target.value);
+                                if (p) {
+                                  setSigner2Name(p.full_name);
+                                  setSigner2Title(p.position);
+                                }
+                              }}
+                              className="max-w-[165px] rounded border border-[#CBD5E1] bg-white px-1.5 py-0.5 text-[11px] text-[#334155]"
+                            >
+                              <option value="">ดึงจากคำสั่ง ๑ ต.ค. ๖๙</option>
+                              {draftPersonnel.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.full_name}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
                         <input
                           type="text"
                           value={signer2Name}
