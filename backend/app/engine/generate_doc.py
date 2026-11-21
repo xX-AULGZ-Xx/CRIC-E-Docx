@@ -493,8 +493,22 @@ def _enable_thai_page_numbers_header(doc: docx.Document) -> None:
     """Enable centered Thai-numeral page numbers in the header from page 2 onward."""
     for sec in doc.sections:
         sec.different_first_page_header_footer = True
-        if not sec.header_distance or sec.header_distance < Cm(0.75):
-            sec.header_distance = Cm(0.8)
+        if sec.top_margin < Cm(1.85):
+            sec.top_margin = Cm(1.85)
+        sec.header_distance = Cm(0.55)
+        if not sec.footer_distance or sec.footer_distance < Cm(0.75):
+            sec.footer_distance = Cm(0.8)
+
+        # Reserve exact 16pt first-page footer height in Pass 1 so Pass 2 catchword never shifts pagination
+        fp_ftr = sec.first_page_footer
+        if not fp_ftr.tables and not fp_ftr.paragraphs[0].text.strip():
+            fp_p = fp_ftr.paragraphs[0]
+            clear_paragraph_runs(fp_p)
+            fp_p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            fp_p.paragraph_format.space_before = Pt(0)
+            fp_p.paragraph_format.space_after = Pt(0)
+            fp_r = fp_p.add_run(" ")
+            set_run_font(fp_r, size_pt=16, bold=False, underline=False)
 
         sect_pr = sec._sectPr
         for old in sect_pr.findall(qn("w:pgNumType")):
