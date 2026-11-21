@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from app.config import RENDERED_DIR
 from app.db import db
-from app.engine.generate_doc import generate_document_with_report
+from app.engine.generate_doc import generate_document_with_report, inject_order_catchwords_if_multipage
 from app.engine.pdf_converter import convert_docx_to_pdf, render_pdf_pages_to_png
 from app.engine.mail_merge_engine import render_single_custom_template
 from app.engine.sp_engine import generate_sp_bundle
@@ -309,6 +309,9 @@ def _render_to_storage(payload: dict[str, Any], base_name: str, convert_pdf: boo
     if convert_pdf:
         try:
             pdf_path = convert_docx_to_pdf(docx_path, RENDERED_DIR)
+            if (payload.get("type") or "").strip().lower() == "order":
+                if inject_order_catchwords_if_multipage(docx_path, pdf_path, font_family=font_used):
+                    pdf_path = convert_docx_to_pdf(docx_path, RENDERED_DIR)
             pdf_name = pdf_path.name
             pngs = render_pdf_pages_to_png(pdf_path, RENDERED_DIR, prefix=base_name)
             page_urls = [f"/v1/files/rendered/{p.name}" for p in pngs]

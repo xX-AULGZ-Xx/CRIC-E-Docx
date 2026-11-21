@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 from contextvars import ContextVar
 import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -416,6 +418,75 @@ def build_memo(payload: dict[str, Any], org: dict[str, Any]) -> docx.Document:
 
     apply_speed_and_secrecy(doc, payload.get("speed", ""), payload.get("secrecy", ""))
     return doc
+
+
+def _extract_thai_catchword(next_page_text: str) -> str:
+    """Extract a Thai official catchword (/...) from the first content line of the next page."""
+    lines = [ln.strip() for ln in (next_page_text or "").splitlines() if ln.strip()]
+    # Skip standalone Thai/Arabic page number line at the top of pages 2+
+    content_lines = [ln for ln in lines if not re.fullmatch(r"[๐-๙0-9]+", ln)]
+    if not content_lines:
+        return ""
+    first_line = " ".join(content_lines[0].split())
+    m_member = re.match(r"^([๐-๙0-9]+\.[๐-๙0-9]+)\s+(\S+)", first_line)
+    if m_member:
+        return f"/{m_member.group(1)} {m_member.group(2)}......."
+    m_head = re.match(r"^([๐-๙0-9]+\.)\s+(.+)", first_line)
+    if m_head:
+        snippet = m_head.group(2)[:28].strip()
+        return f"/{m_head.group(1)} {snippet}..."
+    words = first_line.split(" ")
+    snippet = " ".join(words[:3])[:30].strip()
+    return f"/{snippet}..." if snippet else ""
+
+
+def inject_order_catchwords_if_multipage(
+    docx_path: Path,
+    pdf_path: Path,
+    font_family: str | None = None,
+) -> bool:
+    """Inspect Pass-1 PDF via pdftotext; if multi-page, write bottom-right catchword on page 1 footer."""
+    try:
+        res = subprocess.run(
+            ["pdftotext", str(pdf_path), "-"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except Exception:
+        return False
+    if res.returncode != 0 or not res.stdout:
+        return False
+
+    pages = [p for p in res.stdout.split("\x0c") if p.strip()]
+    if len(pages) < 2:
+        return False
+
+    catchword = _extract_thai_catchword(pages[1])
+    if not catchword:
+        return False
+
+    token = _ACTIVE_FONT.set(resolve_font_family(font_family))
+    try:
+        doc = docx.Document(str(docx_path))
+        sec = doc.sections[0]
+        sec.different_first_page_header_footer = True
+        if not sec.footer_distance or sec.footer_distance < Cm(0.75):
+            sec.footer_distance = Cm(0.8)
+        ftr = sec.first_page_footer
+        p = ftr.paragraphs[0]
+        clear_paragraph_runs(p)
+        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(0)
+        run = p.add_run(catchword)
+        set_run_font(run, size_pt=16, bold=False, underline=False)
+        doc.save(str(docx_path))
+        return True
+    finally:
+        _ACTIVE_FONT.reset(token)
 
 
 def _enable_thai_page_numbers_header(doc: docx.Document) -> None:
